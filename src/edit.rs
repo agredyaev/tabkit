@@ -341,8 +341,8 @@ fn set_domain(book: &Workbook, column: NodeId, dtype: &str, domain: &Domain, pat
             let mut old = BTreeMap::new();
             for member in book.xml.children(m) {
                 require(book.xml.tag(member)=="member" && book.xml.children(member).next().is_none(),"UNSUPPORTED_SHAPE","Unknown list member structure")?;
-                for a in &book.xml.attributes[book.xml.node(member).attributes.clone()] {
-                    require(matches!(a.name.as_str(),"value"|"alias"),"UNSUPPORTED_SHAPE","Unknown list member metadata")?;
+                for a in book.xml.attributes(member) {
+                    require(matches!(a.name,"value"|"alias"),"UNSUPPORTED_SHAPE","Unknown list member metadata")?;
                 }
                 old.insert(Scalar::parse(dtype,book.xml.required(member,"value")?)?.literal(dtype)?,member);
             }
@@ -365,9 +365,9 @@ fn set_domain(book: &Workbook, column: NodeId, dtype: &str, domain: &Domain, pat
 fn categorical_fragment(book:&Workbook,group:NodeId,level:&str,values:&[String])->Result<String>{
     let level=escape_attribute(level,b'"')?;
     let mut ui=String::new();
-    for a in &book.xml.attributes[book.xml.node(group).attributes.clone()] {
+    for a in book.xml.attributes(group) {
         if a.name.starts_with("user:ui-") {
-            ui.push_str(&format!(" {}=\"{}\"",a.name,escape_attribute(&a.value,b'"')?));
+            ui.push_str(&format!(" {}=\"{}\"",a.name,escape_attribute(a.value,b'"')?));
         }
     }
     let member=|v:&str|->Result<String>{

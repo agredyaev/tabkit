@@ -9,7 +9,7 @@ fuzz_target!(|data:&[u8]|{
         for(i,node)in xml.nodes.iter().enumerate(){
             let id=NodeId(i as u32);
             assert!(xml.text.get(node.span.range()).is_some());
-            for a in &xml.attributes[node.attributes.clone()]{
+            for a in xml.attributes(id){
                 assert!(xml.text.get(a.span.range()).is_some());
                 assert!(a.span.start>=node.span.start&&a.span.end<=node.span.end);
             }

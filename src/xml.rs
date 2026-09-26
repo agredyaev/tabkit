@@ -55,17 +55,37 @@ pub struct Node {
     pub attributes: Range<usize>,
     leaf_text: Option<LeafTextId>,
 }
-#[derive(Clone)]
-pub struct Attribute {
-    pub name: String,
-    pub value: String,
+/// A borrowed view of one row; it owns no text and is never stored per attribute.
+#[derive(Clone, Copy)]
+pub struct Attribute<'a> {
+    pub name: &'a str,
+    pub value: &'a str,
     pub span: Span,
     pub quote: u8,
+}
+/// Frozen parallel columns. Every name and unchanged value refers to `Xml::text`.
+/// Only normalized values occupy the single document-local decoded buffer.
+#[derive(Default)]
+struct AttributeTable {
+    names: Vec<Span>,
+    source_values: Vec<Span>,
+    decoded_values: Vec<Option<Span>>,
+    quotes: Vec<u8>,
+    decoded_text: String,
+}
+impl AttributeTable {
+    fn len(&self) -> usize { self.names.len() }
+    fn reserve(&mut self, additional: usize) {
+        self.names.reserve(additional);
+        self.source_values.reserve(additional);
+        self.decoded_values.reserve(additional);
+        self.quotes.reserve(additional);
+    }
 }
 pub struct Xml {
     pub text: String,
     pub nodes: Vec<Node>,
-    pub attributes: Vec<Attribute>,
+    attributes: AttributeTable,
     names: Names,
     leaf_texts: Vec<String>,
     pub sha256: String,
@@ -85,7 +105,7 @@ impl Xml {
         // Count admitted elements once to size the frozen table without geometric slack.
         let count=doc.descendants().filter(|n|n.is_element()).count();
         let mut nodes: Vec<Node> = Vec::with_capacity(count);
-        let mut attributes = Vec::new();
+        let mut attributes = AttributeTable::default();
         let mut names = Names::default();
         let mut name_lookup = BTreeMap::new();
         let mut leaf_texts = Vec::new();
@@ -162,11 +182,31 @@ impl Xml {
     pub fn tag(&self, id: NodeId) -> &str {
         self.names.get(self.node(id).name)
     }
-    pub fn attr(&self, id: NodeId, name: &str) -> Option<&Attribute> {
-        self.attributes[self.node(id).attributes.clone()].iter().find(|a| a.name == name)
+    fn attribute(&self, index: usize) -> Attribute<'_> {
+        let table = &self.attributes;
+        let span = table.source_values[index];
+        let value = match table.decoded_values[index] {
+            Some(decoded) => &table.decoded_text[decoded.range()],
+            None => &self.text[span.range()],
+        };
+        Attribute {
+            name: &self.text[table.names[index].range()],
+            value,
+            span,
+            quote: table.quotes[index],
+        }
+    }
+    pub fn attributes(&self, id: NodeId) -> impl ExactSizeIterator<Item=Attribute<'_>> + DoubleEndedIterator {
+        self.node(id).attributes.clone().map(|index| self.attribute(index))
+    }
+    pub fn attr(&self, id: NodeId, name: &str) -> Option<Attribute<'_>> {
+        // Search only the name column; resolve value/patch metadata for the match.
+        self.node(id).attributes.clone()
+            .find(|&index| self.text[self.attributes.names[index].range()] == *name)
+            .map(|index| self.attribute(index))
     }
     pub fn value(&self, id: NodeId, name: &str) -> Option<&str> {
-        self.attr(id, name).map(|a| a.value.as_str())
+        self.attr(id, name).map(|a| a.value)
     }
     pub fn required(&self, id: NodeId, name: &str) -> Result<&str> {
         self.value(id, name).ok_or_else(|| Error::new("UNSUPPORTED_SHAPE", format!("{} lacks {name}", self.tag(id))))
@@ -219,7 +259,7 @@ fn whitespace(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r')
 }
 /// This locates ranges only AFTER roxmltree has validated the document.
-fn scan_attributes(text: &str, start: usize, out: &mut Vec<Attribute>) -> Result<()> {
+fn scan_attributes(text: &str, start: usize, out: &mut AttributeTable) -> Result<()> {
     let bytes = text.as_bytes();
     let mut p = start + 1;
     while p < bytes.len() && !whitespace(bytes[p]) && !matches!(bytes[p], b'/' | b'>') {
@@ -237,7 +277,7 @@ fn scan_attributes(text: &str, start: usize, out: &mut Vec<Attribute>) -> Result
         while p < bytes.len() && !whitespace(bytes[p]) && bytes[p] != b'=' {
             p += 1;
         }
-        let name = text.get(ns..p).ok_or_else(|| Error::new("XML", "Invalid attribute range"))?.to_string();
+        let name = Span::new(ns..p)?;
         while p < bytes.len() && whitespace(bytes[p]) {
             p += 1;
         }
@@ -254,21 +294,25 @@ fn scan_attributes(text: &str, start: usize, out: &mut Vec<Attribute>) -> Result
             p += 1;
         }
         require(p < bytes.len(), "XML", "Unterminated attribute")?;
-        let value = decode_attribute(&text[begin..p])?;
-        out.push(Attribute {
-            name,
-            value,
-            span: Span::new(begin..p)?,
-            quote
-        });
+        let span = Span::new(begin..p)?;
+        let raw = &text[begin..p];
+        let decoded = if raw.contains(['&', '\r', '\n', '\t']) {
+            let start = out.decoded_text.len();
+            decode_attribute(raw, &mut out.decoded_text)?;
+            Some(Span::new(start..out.decoded_text.len())?)
+        } else { None };
+        out.names.push(name);
+        out.source_values.push(span);
+        out.decoded_values.push(decoded);
+        out.quotes.push(quote);
         p += 1;
     }
     Ok(())
 }
-fn decode_attribute(raw: &str) -> Result<String> {
+fn decode_attribute(raw: &str, out: &mut String) -> Result<()> {
     // Literal XML whitespace is normalized; whitespace from references is not.
-    // A single output buffer replaces two full normalized copies plus decoding.
-    let mut out=String::with_capacity(raw.len());
+    // Append only transformed values; no per-attribute allocation or self-borrow.
+    out.try_reserve(raw.len()).map_err(|_| Error::new("LIMIT", "Cannot reserve decoded attribute storage"))?;
     let mut rest=raw;
     while let Some(at)=rest.find(['&','\r','\n','\t']) {
         out.push_str(&rest[..at]);
@@ -303,7 +347,7 @@ fn decode_attribute(raw: &str) -> Result<String> {
         rest=&rest[end+1..];
     }
     out.push_str(rest);
-    Ok(out)
+    Ok(())
 }
 pub fn escape_attribute(value: &str, quote: u8) -> Result<String> {
     let mut out = String::with_capacity(value.len());
@@ -343,3 +387,7 @@ fn check_encoding_declaration(text:&str)->Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "xml_soa_tests.rs"]
+mod soa_tests;

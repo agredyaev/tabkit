@@ -273,9 +273,9 @@ impl Workbook {
                     (ids.len()==1).then(||ids.iter().next().copied()).flatten()
                 })
             };
-            for attr in &xml.attributes[xml.node(n).attributes.clone()] {
+            for attr in xml.attributes(n) {
                 if attr.name != "column" || xml.tag(n)=="column-instance" { continue; }
-                if let Ok((ds,field)) = formula::qualified(&attr.value) {
+                if let Ok((ds,field)) = formula::qualified(attr.value) {
                     if let Some(field_id) = resolve_qualified(&ds,&field) {
                         known_uses.push(FieldUse { field_id,worksheet_node:sheet,node_id:n,kind:"column_binding" });
                     }
@@ -521,7 +521,7 @@ impl Workbook {
         for child in self.xml.children(n) {
             require(matches!(self.xml.tag(child), "calculation" | "members" | "range"), "UNSUPPORTED_SHAPE", "Only static parameters with known children are editable")?;
         }
-        for attr in &self.xml.attributes[self.xml.node(n).attributes.clone()] {
+        for attr in self.xml.attributes(n) {
             let name = attr.name.to_ascii_lowercase();
             require(!name.contains("source-field") && !name.contains("refresh") && !name.contains("dynamic"), "UNSUPPORTED_SHAPE", "Dynamic parameter metadata is not editable")?;
         }
@@ -605,8 +605,8 @@ impl Workbook {
     }
     fn members(&self, n: NodeId, level: Option<&str>, values: &mut Vec<String>) -> Result<()> {
         let func = self.xml.required(n, "function")?;
-        for a in &self.xml.attributes[self.xml.node(n).attributes.clone()] {
-            require(matches!(a.name.as_str(), "function" | "level" | "member") || a.name.starts_with("user:ui-"), "UNSUPPORTED_SHAPE", "Unknown groupfilter attributes")?;
+        for a in self.xml.attributes(n) {
+            require(matches!(a.name, "function" | "level" | "member") || a.name.starts_with("user:ui-"), "UNSUPPORTED_SHAPE", "Unknown groupfilter attributes")?;
             if a.name == "user:ui-enumeration" {
                 require(a.value == "inclusive", "UNSUPPORTED_SHAPE", "Exclusion filter is unsupported")?;
             }
