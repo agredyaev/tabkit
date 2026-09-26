@@ -1,0 +1,59 @@
+[package]
+name = "tabkit"
+version = "0.1.5"
+edition = "2024"
+rust-version = "1.88"
+description = "Focused Tableau 2025 workbook tools for Amazon Quick Desktop"
+publish = false
+build = "build.rs"
+
+[features]
+default = []
+# The native SDK is only required when this feature is built.
+hyper = ["dep:cc", "dep:sqlparser"]
+
+[dependencies]
+base64 = "0.22"
+clap = { version = "4.5", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rmcp = { version = "=3.4.1", default-features = false, features = ["server", "transport-io"] }
+roxmltree = { version = "0.20", features = ["positions"] }
+rust_decimal = { version = "1", default-features = false, features = ["std"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.10"
+# Parsing is a policy input, never SQL execution.
+sqlparser = { version = "=0.53.0", features = ["visitor"], optional = true }
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1"
+zip = { version = "2.4", default-features = false, features = ["deflate-flate2", "flate2"] }
+# Select one DEFLATE backend for zip without enabling its Zopfli encoder.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+# Exercise SQL admission without requiring the proprietary Hyper runtime.
+sqlparser = { version = "=0.53.0", features = ["visitor"] }
+
+[build-dependencies]
+cc = { version = "1", optional = true }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.59.0", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }

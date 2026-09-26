@@ -1,0 +1,11 @@
+{
+  "input": "ratio.candidate.twb",
+  "expected_sha256": "REPLACE_WITH_CANDIDATE_SHA256",
+  "name": "Sales candidate",
+  "project_id": "REPLACE_WITH_ALLOWED_PROJECT_LUID",
+  "overwrite_workbook_id": null,
+  "acknowledge_tableau_not_run": true,
+  "acknowledge_unsupported_objects": false,
+  "test_suite": null,
+  "expected_suite_sha256": null
+}

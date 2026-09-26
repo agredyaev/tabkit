@@ -1,0 +1,111 @@
+[package]
+name = "tabkit-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[features]
+default = []
+hyper = []
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+base64 = "0.22"
+clap = { version = "4.5", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+roxmltree = { version = "0.20", features = ["positions"] }
+rust_decimal = { version = "1", default-features = false, features = ["std"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.10"
+# Parsing is a policy input, never SQL execution.
+sqlparser = { version = "=0.53.0", features = ["visitor"] }
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1"
+zip = { version = "2.4", default-features = false, features = ["deflate-flate2", "flate2"] }
+# Select one DEFLATE backend for zip without enabling its Zopfli encoder.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "wire_json"
+path = "fuzz_targets/wire_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xml_workbook"
+path = "fuzz_targets/xml_workbook.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "formula"
+path = "fuzz_targets/formula.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "patches"
+path = "fuzz_targets/patches.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scalars"
+path = "fuzz_targets/scalars.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sql_read"
+path = "fuzz_targets/sql_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "oauth_callback"
+path = "fuzz_targets/oauth_callback.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "twbx_package"
+path = "fuzz_targets/twbx_package.rs"
+test = false
+doc = false
+bench = false
+
+
+[[bin]]
+name = "twbx_structured"
+path = "fuzz_targets/twbx_structured.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "workbook_edits"
+path = "fuzz_targets/workbook_edits.rs"
+test = false
+doc = false
+bench = false

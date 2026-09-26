@@ -1,0 +1,1 @@
+SELECT SUM("Profit") / NULLIF(SUM("Sales"),0) FROM "Extract"."Extract"

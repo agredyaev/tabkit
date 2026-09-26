@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "tabkit": {
+      "command": "/absolute/path/to/tabkit",
+      "args": [
+        "--workspace", "/absolute/path/to/tableau-workspace",
+        "--tableau-server", "https://tableau.example.com",
+        "--tableau-site", "your-site-content-url",
+        "--tableau-api-version", "3.25",
+        "--tableau-auth", "oauth",
+        "--oauth-issuer", "https://login.example.com/your-tenant/v2.0",
+        "--oauth-client-id", "public-native-client-id",
+        "--oauth-redirect-uri", "http://127.0.0.1:8765/callback",
+        "--allow-data-output",
+        "mcp"
+      ]
+    }
+  }
+}

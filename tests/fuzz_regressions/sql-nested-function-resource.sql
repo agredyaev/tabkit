@@ -1,0 +1,1 @@
+SELECT SUM(S(fM((fMM(S(fM(S#M(U$M(S(fM(SM(U$(S(fM((fMM(S(fM(S#M(U$M(S$$$

@@ -1,0 +1,9 @@
+{
+  "input": "extract.hyper",
+  "expected_sha256": "REPLACE_WITH_FILE_SHA256",
+  "operation": {
+    "operation": "query",
+    "sql": "SELECT SUM(\"Sales\") AS \"sales\" FROM \"Extract\".\"Extract\""
+  },
+  "max_rows": 10
+}

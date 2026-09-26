@@ -1,0 +1,56 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Synthetic contract example. NOT saved or qualified by Tableau Desktop. -->
+<workbook source-build='2025.1.0 (synthetic)' version='18.1' xmlns:user='http://www.tableausoftware.com/xml/user'>
+  <datasources>
+    <datasource name='ds_orders' caption='Orders'>
+      <column name='[Sales]' datatype='real' role='measure' type='quantitative' />
+      <column name='[Profit]' datatype='real' role='measure' type='quantitative' />
+      <column name='[Region]' datatype='string' role='dimension' type='nominal' />
+      <column name='[Calculation_Ratio]' caption='Profit Ratio' datatype='real' role='measure' type='quantitative'>
+        <calculation class='tableau' formula='[Profit] / [Sales]' />
+      </column>
+          <column name='[Discount]' datatype='real' role='measure' type='quantitative' />
+    </datasource>
+    <datasource name='Parameters' inline='true'>
+      <column name='[Parameter 1]' caption='Top N' datatype='integer' role='measure' type='quantitative' param-domain-type='range' value='10'>
+        <calculation class='tableau' formula='10' />
+        <range min='1' max='100' granularity='1' />
+      </column>
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name='Sales by Region'>
+      <table>
+        <view>
+          <datasources><datasource name='ds_orders'/><datasource name='Parameters'/></datasources>
+          <datasource-dependencies datasource='ds_orders'>
+            <column name='[Profit]' datatype='real' role='measure' type='quantitative' />
+            <column name='[Sales]' datatype='real' role='measure' type='quantitative' />
+            <column name='[Region]' datatype='string' role='dimension' type='nominal' />
+            <column name='[Calculation_Ratio]' caption='Profit Ratio' datatype='real' role='measure' type='quantitative'>
+              <calculation class='tableau' formula='[Profit] / [Sales]' />
+            </column>
+            <column-instance name='[none:Region:nk]' column='[Region]' derivation='None' type='nominal' />
+            <column-instance name='[none:Sales:qk]' column='[Sales]' derivation='None' type='quantitative' />
+          </datasource-dependencies>
+          <datasource-dependencies datasource='Parameters'>
+            <column name='[Parameter 1]' caption='Top N' datatype='integer' role='measure' type='quantitative' param-domain-type='range' value='10'>
+              <calculation class='tableau' formula='10' />
+              <range min='1' max='100' granularity='1' />
+            </column>
+          </datasource-dependencies>
+          <filter class='categorical' column='[ds_orders].[none:Region:nk]'>
+            <groupfilter function='member' level='[none:Region:nk]' user:ui-enumeration='inclusive' member='&quot;West&quot;' />
+          </filter>
+          <filter class='quantitative' column='[ds_orders].[none:Sales:qk]' included-values='in-range'>
+            <min>0</min><max>100000</max>
+          </filter>
+        </view>
+        <panes><pane><encodings><color column='[ds_orders].[none:Region:nk]'/></encodings></pane></panes>
+      </table>
+      <simple-id uuid='{00000000-0000-0000-0000-000000000001}'/>
+    </worksheet>
+  </worksheets>
+  <dashboards><dashboard name='Overview'><zones><zone id='1' name='Sales by Region' x='0' y='0' w='100' h='100'/></zones></dashboard></dashboards>
+  <windows />
+</workbook>

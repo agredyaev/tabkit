@@ -1,0 +1,1 @@
+IF [Sales]=0 THEN 0 ELSE [Profit]/[Sales] END

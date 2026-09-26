@@ -1,0 +1,5 @@
+{
+  "plan": "ratio.plan.json",
+  "expected_plan_sha256": "REPLACE_WITH_PLAN_SHA256_FROM_WORKBOOK_PLAN",
+  "output": "ratio.candidate.twb"
+}

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "input_sha256": "c9a2327cde033f7ac6617e2509751e93fb92c2c4542b3f2495c5fda0b14d1932",
+  "assertions": [
+    {
+      "assert": "calculation",
+      "field_id": 3,
+      "formula": "[Profit] / [Sales]"
+    },
+    {
+      "assert": "parameter",
+      "field_id": 4,
+      "current": {
+        "kind": "integer",
+        "value": 10
+      },
+      "domain": null
+    },
+    {
+      "assert": "filter_values",
+      "filter_id": 0,
+      "values": [
+        "West"
+      ]
+    },
+    {
+      "assert": "no_diagnostics"
+    }
+  ]
+}

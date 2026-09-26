@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "tabkit": {
+      "command": "/absolute/path/to/tabkit",
+      "args": [
+        "--workspace", "/absolute/path/to/tableau-workspace",
+        "--tableau-server", "https://tableau.example.com",
+        "--tableau-site", "your-site-content-url",
+        "--tableau-api-version", "3.25",
+        "--tableau-auth", "pat",
+        "--tableau-pat-name", "tabkit",
+        "--tableau-pat-secret-env", "TABLEAU_PAT_SECRET",
+        "--allow-data-output",
+        "mcp"
+      ],
+      "env": {
+        "TABLEAU_PAT_SECRET": "<set outside source control>"
+      }
+    }
+  }
+}
