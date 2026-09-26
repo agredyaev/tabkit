@@ -171,3 +171,6 @@ mod regression;
 mod properties;
 #[cfg(test)]
 mod behavioral;
+
+#[cfg(test)]
+mod edge_cases;

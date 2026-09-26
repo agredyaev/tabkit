@@ -109,3 +109,17 @@ path = "fuzz_targets/workbook_edits.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "wire_frames"
+path = "fuzz_targets/wire_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "edit_sequences"
+path = "fuzz_targets/edit_sequences.rs"
+test = false
+doc = false
+bench = false
