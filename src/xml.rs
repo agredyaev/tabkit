@@ -82,30 +82,38 @@ impl Xml {
         .map_err(|e| Error::new("XML", e.to_string()))?;
         check_encoding_declaration(&text)?;
         require(doc.root_element().tag_name().namespace().is_none(), "UNSUPPORTED_SHAPE", "Namespaced workbook roots are unsupported")?;
-        let mut nodes: Vec<Node> = Vec::new();
+        // Count admitted elements once to size the frozen table without geometric slack.
+        let count=doc.descendants().filter(|n|n.is_element()).count();
+        let mut nodes: Vec<Node> = Vec::with_capacity(count);
         let mut attributes = Vec::new();
         let mut names = Names::default();
         let mut name_lookup = BTreeMap::new();
         let mut leaf_texts = Vec::new();
-        let mut ids = std::collections::HashMap::new();
-        let mut last_child: Vec<Option<NodeId>> = Vec::new();
+        // Preorder links need only the open ancestors, not a map per parsed node.
+        let mut ancestors: Vec<(NodeId,Option<NodeId>)> = Vec::new();
         for n in doc.descendants().filter(|n| n.is_element()) {
             let id = NodeId(nodes.len() as u32);
-            let parent = n.parent().and_then(|p| ids.get(&p.id()).copied());
+            let range=n.range();
+            while ancestors.last().is_some_and(|(id,_)|nodes[id.0 as usize].span.end as usize<=range.start) {
+                ancestors.pop();
+            }
+            let parent=ancestors.last().map(|(id,_)|*id);
             let begin = attributes.len();
-            attributes.extend(scan_attributes(&text, n.range().start)?);
+            // Reserve the admitted attribute batch before appending to avoid per-item capacity jumps.
+            attributes.reserve(n.attributes().len());
+            scan_attributes(&text, range.start, &mut attributes)?;
             let end = attributes.len();
-            // Include namespace identity in tag names. Unknown vendor nodes stay opaque.
-            let name = match n.tag_name().namespace() {
-                None => n.tag_name().name().to_string(),
-                Some(ns) => format!("{{{ns}}}{}", n.tag_name().name()),
-            };
-            let name_id = match name_lookup.get(&name) {
-                Some(id) => *id,
-                None => {
-                    let id = TextId(names.strings.len() as u32);
-                    names.strings.push(name.clone());
-                    name_lookup.insert(name, id);
+            // Borrow parser names during admission; allocate each distinct tag once.
+            let tag=n.tag_name();
+            let key=(tag.namespace(),tag.name());
+            let name_id=match name_lookup.get(&key) {
+                Some(id)=>*id,
+                None=>{
+                    let id=TextId(names.strings.len() as u32);
+                    names.strings.push(match key.0 {
+                        None=>key.1.to_owned(),Some(ns)=>format!("{{{ns}}}{}",key.1),
+                    });
+                    name_lookup.insert(key,id);
                     id
                 }
             };
@@ -124,22 +132,18 @@ impl Xml {
                 first_child: None,
                 next_sibling: None,
                 name: name_id,
-                span: Span::new(n.range())?,
+                span: Span::new(range)?,
                 attributes: begin..end,
                 leaf_text
             });
-            last_child.push(None);
-            if let Some(p) = parent {
-                if let Some(last) = last_child[p.0 as usize] {
-                    nodes[last.0 as usize].next_sibling = Some(id);
-                }
-                else {
-                    nodes[p.0 as usize].first_child = Some(id);
-                }
-                last_child[p.0 as usize] = Some(id);
+            if let Some((p,last_child))=ancestors.last_mut() {
+                if let Some(last)=*last_child { nodes[last.0 as usize].next_sibling=Some(id); }
+                else { nodes[p.0 as usize].first_child=Some(id); }
+                *last_child=Some(id);
             }
-            ids.insert(n.id(), id);
+            ancestors.push((id,None));
         }
+        drop(name_lookup);
         drop(doc);
         require(!nodes.is_empty(), "XML", "Empty XML document")?;
         let sha256 = crate::fs::sha256(text.as_bytes());
@@ -215,13 +219,12 @@ fn whitespace(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r')
 }
 /// This locates ranges only AFTER roxmltree has validated the document.
-fn scan_attributes(text: &str, start: usize) -> Result<Vec<Attribute>> {
+fn scan_attributes(text: &str, start: usize, out: &mut Vec<Attribute>) -> Result<()> {
     let bytes = text.as_bytes();
     let mut p = start + 1;
     while p < bytes.len() && !whitespace(bytes[p]) && !matches!(bytes[p], b'/' | b'>') {
         p += 1;
     }
-    let mut out = Vec::new();
     loop {
         while p < bytes.len() && whitespace(bytes[p]) {
             p += 1;
@@ -260,17 +263,24 @@ fn scan_attributes(text: &str, start: usize) -> Result<Vec<Attribute>> {
         });
         p += 1;
     }
-    Ok(out)
+    Ok(())
 }
 fn decode_attribute(raw: &str) -> Result<String> {
-    let normalized = raw.replace("\r\n", " ").replace(['\r','\n','\t'], " ");
-    let mut out = String::with_capacity(raw.len());
-    let mut rest = normalized.as_str();
-    while let Some(at) = rest.find('&') {
+    // Literal XML whitespace is normalized; whitespace from references is not.
+    // A single output buffer replaces two full normalized copies plus decoding.
+    let mut out=String::with_capacity(raw.len());
+    let mut rest=raw;
+    while let Some(at)=rest.find(['&','\r','\n','\t']) {
         out.push_str(&rest[..at]);
-        rest = &rest[at+1..];
-        let end = rest.find(';').ok_or_else(|| Error::new("XML", "Unterminated entity"))?;
-        let entity = &rest[..end];
+        let kind=rest.as_bytes()[at];
+        rest=&rest[at+1..];
+        if kind!=b'&' {
+            out.push(' ');
+            if kind==b'\r' && rest.starts_with('\n') { rest=&rest[1..]; }
+            continue;
+        }
+        let end=rest.find(';').ok_or_else(|| Error::new("XML", "Unterminated entity"))?;
+        let entity=&rest[..end];
         let ch = match entity {
             "amp" => '&',
             "lt" => '<',
@@ -290,7 +300,7 @@ fn decode_attribute(raw: &str) -> Result<String> {
             }
         };
         out.push(ch);
-        rest = &rest[end+1..];
+        rest=&rest[end+1..];
     }
     out.push_str(rest);
     Ok(out)
