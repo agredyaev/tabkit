@@ -174,3 +174,9 @@ mod behavioral;
 
 #[cfg(test)]
 mod edge_cases;
+
+#[cfg(test)]
+mod local_core_tests;
+
+#[cfg(test)]
+mod xml_index_tests;
