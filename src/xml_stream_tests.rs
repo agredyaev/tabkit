@@ -127,3 +127,31 @@ fn sequential_and_parallel_parse_paths_bind_digest_to_exact_source_bytes() {
         assert_eq!(parsed.text,source);
     }
 }
+
+
+#[test]
+fn fast_path_is_conservative_and_matches_tokenizer_projection() {
+    let common="<?xml version='1.0' encoding='utf-8'?><workbook xmlns:u='urn:u'><worksheet name='S'><u:x a='A&amp;B'/><leaf>left&#10;right</leaf></worksheet></workbook>";
+    let fast=super::stream::fast_for_test(common.as_bytes().to_vec(),&Limits::default()).unwrap().expect("common Tableau-shaped XML must use fast path");
+    let fallback=super::stream::fallback_for_test(common.as_bytes().to_vec(),&Limits::default()).unwrap();
+    assert_eq!(fast.nodes.len(),fallback.nodes.len());
+    for i in 0..fast.nodes.len() {
+        let id=NodeId(i as u32);
+        assert_eq!(fast.tag(id),fallback.tag(id));
+        assert_eq!(fast.node(id).span,fallback.node(id).span);
+        assert_eq!(fast.attributes(id).map(|a|(a.name.to_owned(),a.value.to_owned(),a.span,a.quote)).collect::<Vec<_>>(),
+            fallback.attributes(id).map(|a|(a.name.to_owned(),a.value.to_owned(),a.span,a.quote)).collect::<Vec<_>>());
+        assert_eq!(fast.text_content(id).ok(),fallback.text_content(id).ok());
+    }
+    for fallback_source in [
+        "<workbook café='x'/>",
+        "<workbook><?vendor x?></workbook>",
+        "<?xml version='1.0' standalone='yes'?><workbook/>",
+        "<workbook>bad]]>text</workbook>",
+        "<workbook a='1'b='2'/>",
+        "<?xmlversion='1.0'?><workbook/>",
+    ] {
+        assert!(super::stream::fast_for_test(fallback_source.as_bytes().to_vec(),&Limits::default()).unwrap().is_none(),
+            "must delegate lexical edge case: {fallback_source}");
+    }
+}

@@ -53,6 +53,7 @@ fn parse_text(text:String,limits:&Limits,sha256:String)->Result<Xml>{
 }
 fn parse_text_without_hash(text:&str,limits:&Limits)->Result<Xml>{
     check_encoding_declaration(text)?;
+    if let Some(result)=fast::parse(text,limits)? { return Ok(result); }
     Builder::new(text,limits).run()
 }
 impl<'a> Builder<'a> {
@@ -92,6 +93,9 @@ impl<'a> Builder<'a> {
                     return Err(Error::new("XML", "DTD declarations are disabled")),
             }
         }
+        self.finish_run()
+    }
+    fn finish_run(self)->Result<Xml> {
         require(self.seen_root && self.stack.is_empty() && self.pending.is_none(), "XML", "Incomplete XML document")?;
         Ok(self.result)
     }
@@ -290,3 +294,20 @@ fn normalize_text(mut raw: &str, cdata: bool, mut out: Option<&mut String>) -> R
         if let Some(out) = out.as_deref_mut() { out.push(value); }
     }
 }
+
+#[cfg(test)]
+pub(super) fn fast_for_test(bytes:Vec<u8>,limits:&Limits)->Result<Option<Xml>> {
+    let text=String::from_utf8(bytes).map_err(|_|Error::new("ENCODING","Only UTF-8 TWB is supported; no implicit transcoding"))?;
+    check_encoding_declaration(&text)?;
+    let Some(mut result)=fast::parse(&text,limits)? else { return Ok(None); };
+    result.sha256=crate::fs::sha256(text.as_bytes());result.text=text;Ok(Some(result))
+}
+#[cfg(test)]
+pub(super) fn fallback_for_test(bytes:Vec<u8>,limits:&Limits)->Result<Xml> {
+    let text=String::from_utf8(bytes).map_err(|_|Error::new("ENCODING","Only UTF-8 TWB is supported; no implicit transcoding"))?;
+    check_encoding_declaration(&text)?;
+    let mut result=Builder::new(&text,limits).run()?;
+    result.sha256=crate::fs::sha256(text.as_bytes());result.text=text;Ok(result)
+}
+#[path = "xml_fast.rs"]
+mod fast;
