@@ -63,6 +63,8 @@ pub struct Node {
     pub span:Span,
     attributes:IndexRange,
     leaf_text:u32,
+    worksheet_owner:u32,
+    dependency_owner:u32,
     raw_attributes:Span,
     normalized:IndexRange,
 }
@@ -109,8 +111,6 @@ pub struct Xml {
     names: Names,
     leaf_texts: Vec<Span>,
     leaf_text: String,
-    worksheet_owners: Vec<Option<NodeId>>,
-    dependency_owners: Vec<Option<NodeId>>,
     pub(crate) semantic: SemanticNodes,
     pub sha256: String,
 }
@@ -173,8 +173,8 @@ impl Xml {
         Ok(first)
     }
     pub fn ancestor(&self, id: NodeId, tag: &str) -> Option<NodeId> {
-        if tag == "worksheet" { return self.worksheet_owners[id.0 as usize]; }
-        if tag == "datasource-dependencies" { return self.dependency_owners[id.0 as usize]; }
+        if tag=="worksheet" { return Node::unlink(self.node(id).worksheet_owner); }
+        if tag=="datasource-dependencies" { return Node::unlink(self.node(id).dependency_owner); }
         let mut p = self.node(id).parent();
         while let Some(n) = p {
             if self.tag(n) == tag {
@@ -206,12 +206,20 @@ impl Iterator for Children<'_> {
 fn whitespace(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r')
 }
+fn attribute_special(bytes:&[u8])->Option<usize> {
+    match (memchr::memchr3(b'&',b'\r',b'\n',bytes), memchr::memchr(b'\t',bytes)) {
+        (Some(a),Some(b))=>Some(a.min(b)),
+        (Some(a),None)=>Some(a),
+        (None,Some(b))=>Some(b),
+        (None,None)=>None,
+    }
+}
 fn decode_attribute(raw: &str, out: &mut String) -> Result<()> {
     // Literal XML whitespace is normalized; whitespace from references is not.
     // Append only transformed values; no per-attribute allocation or self-borrow.
     out.try_reserve(raw.len()).map_err(|_| Error::new("LIMIT", "Cannot reserve decoded attribute storage"))?;
     let mut rest=raw;
-    while let Some(at)=rest.find(['&','\r','\n','\t']) {
+    while let Some(at)=attribute_special(rest.as_bytes()) {
         out.push_str(&rest[..at]);
         let kind=rest.as_bytes()[at];
         rest=&rest[at+1..];

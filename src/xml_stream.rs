@@ -24,25 +24,42 @@ struct Builder<'a> {
     stack: Vec<Frame<'a>>, pending: Option<Frame<'a>>,
     seen_root: bool, node_count: u32, attribute_count: usize,
 }
-pub(super) fn parse(bytes: Vec<u8>, limits: &Limits) -> Result<Xml> {
-    let sha256 = crate::fs::sha256(&bytes);
-    parse_with_sha256(bytes, limits, sha256)
+pub(super) fn parse(bytes:Vec<u8>,limits:&Limits)->Result<Xml>{
+    require(bytes.len() as u64<=limits.xml_bytes&&bytes.len()<=u32::MAX as usize,
+        "LIMIT","TWB is too large")?;
+    let text=String::from_utf8(bytes).map_err(|_|Error::new("ENCODING","Only UTF-8 TWB is supported; no implicit transcoding"))?;
+    if text.len()<256*1024 {
+        let sha256=crate::fs::sha256(text.as_bytes());
+        return parse_text(text,limits,sha256);
+    }
+    let (mut result,sha256)=std::thread::scope(|scope|{
+        let source=text.as_str();
+        let digest=scope.spawn(move ||crate::fs::sha256(source.as_bytes()));
+        let parsed=parse_text_without_hash(source,limits);
+        let sha256=digest.join().map_err(|_|Error::new("INTERNAL","Hash worker failed"))?;
+        Ok::<_,Error>((parsed?,sha256))
+    })?;
+    result.sha256=sha256;result.text=text;Ok(result)
 }
-pub(super) fn parse_with_sha256(bytes: Vec<u8>, limits: &Limits, sha256: String) -> Result<Xml> {
-    require(bytes.len() as u64 <= limits.xml_bytes && bytes.len() <= u32::MAX as usize,
-        "LIMIT", "TWB is too large")?;
-    let text = String::from_utf8(bytes).map_err(|_| Error::new("ENCODING", "Only UTF-8 TWB is supported; no implicit transcoding"))?;
-    check_encoding_declaration(&text)?;
-    let mut result = Builder::new(&text, limits).run()?;
-    result.sha256 = sha256; result.text = text;
-    Ok(result)
+pub(super) fn parse_with_sha256(bytes:Vec<u8>,limits:&Limits,sha256:String)->Result<Xml>{
+    require(bytes.len() as u64<=limits.xml_bytes&&bytes.len()<=u32::MAX as usize,
+        "LIMIT","TWB is too large")?;
+    let text=String::from_utf8(bytes).map_err(|_|Error::new("ENCODING","Only UTF-8 TWB is supported; no implicit transcoding"))?;
+    parse_text(text,limits,sha256)
+}
+fn parse_text(text:String,limits:&Limits,sha256:String)->Result<Xml>{
+    let mut result=parse_text_without_hash(&text,limits)?;
+    result.sha256=sha256;result.text=text;Ok(result)
+}
+fn parse_text_without_hash(text:&str,limits:&Limits)->Result<Xml>{
+    check_encoding_declaration(text)?;
+    Builder::new(text,limits).run()
 }
 impl<'a> Builder<'a> {
     fn new(source: &'a str, limits: &'a Limits) -> Self {
         Self { source, limits, result: Xml { text: String::new(), nodes: Vec::new(),
-            normalized: Normalized::default(), names: Names::default(), leaf_texts: Vec::new(),
-            leaf_text: String::new(), worksheet_owners: Vec::new(), dependency_owners: Vec::new(),
-            semantic: SemanticNodes::default(), sha256: String::new() },
+            normalized:Normalized::default(), names:Names::default(), leaf_texts:Vec::new(),
+            leaf_text:String::new(), semantic:SemanticNodes::default(), sha256:String::new() },
             bindings: HashMap::from([("xml", 1)]), default_ns: 0, undo: Vec::new(),
             uri_ids: HashMap::from([(String::new(), 0), (XML_URI.to_owned(), 1)]),
             uris: vec![String::new(), XML_URI.to_owned()], tag_ids: HashMap::new(), last_tag: None,
@@ -99,8 +116,8 @@ impl<'a> Builder<'a> {
         self.result.nodes.push(Node { parent:Node::link(parent), first_child:NONE_ID, next_sibling:NONE_ID,
             name:TextId(0), span:Span::new(span.clone())?,
             attributes:IndexRange::empty(self.attribute_count), leaf_text:NONE_ID,
+            worksheet_owner:Node::link(sheet), dependency_owner:Node::link(dependency),
             raw_attributes:Span::new(span.end..span.end)?, normalized:IndexRange::empty(normalized) });
-        self.result.worksheet_owners.push(sheet); self.result.dependency_owners.push(dependency);
         self.attrs.clear();
         self.pending = Some(Frame { id, prefix, local, ns_mark: self.undo.len(),
             text_begin: self.result.leaf_text.len(), leaf: true, last_text: false,
@@ -110,7 +127,7 @@ impl<'a> Builder<'a> {
     fn attribute(&mut self, prefix: &'a str, local: &'a str, value: Range<usize>) -> Result<()> {
         require(self.pending.is_some(), "XML", "Attribute outside a start tag")?;
         let raw: &'a str = &self.source[value.clone()];
-        let decoded = if raw.contains(['&', '\r', '\n', '\t']) {
+        let decoded = if attribute_special(raw.as_bytes()).is_some() {
             let span=if let Some(span)=self.decoded_cache.get(raw) {*span} else {
                 let pool=&mut self.result.normalized;
                 let begin=pool.text.len(); decode_attribute(raw,&mut pool.text)?;
@@ -259,7 +276,7 @@ pub(super) fn reference(entity: &str) -> Result<char> {
 }
 fn normalize_text(mut raw: &str, cdata: bool, mut out: Option<&mut String>) -> Result<()> {
     loop {
-        let at = if cdata { raw.find('\r') } else { raw.find(['&', '\r']) };
+        let at=if cdata {memchr::memchr(b'\r',raw.as_bytes())} else {memchr::memchr2(b'&',b'\r',raw.as_bytes())};
         let Some(at) = at else { if let Some(out) = out { out.push_str(raw); } return Ok(()); };
         if let Some(out) = out.as_deref_mut() { out.push_str(&raw[..at]); }
         let kind = raw.as_bytes()[at]; raw = &raw[at+1..];

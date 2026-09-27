@@ -114,3 +114,16 @@ fn semantic_side_tables_match_full_node_scans() {
     let expected:Vec<_>=x.nodes.iter().enumerate().filter_map(|(i,_)|{let id=NodeId(i as u32);(x.tag(id)!="column-instance"&&x.value(id,"column").is_some()).then_some(id)}).collect();
     assert_eq!(x.semantic.column_bindings,expected);
 }
+
+#[test]
+fn sequential_and_parallel_parse_paths_bind_digest_to_exact_source_bytes() {
+    for repeats in [1usize, 20_000] {
+        let mut source=String::from("<workbook>");
+        for _ in 0..repeats { source.push_str("<n a='plain'/>"); }
+        source.push_str("</workbook>");
+        let expected=crate::fs::sha256(source.as_bytes());
+        let parsed=Xml::parse(source.clone().into_bytes(),&Limits::default()).unwrap();
+        assert_eq!(parsed.sha256,expected);
+        assert_eq!(parsed.text,source);
+    }
+}
