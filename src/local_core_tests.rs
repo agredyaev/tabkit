@@ -215,6 +215,15 @@ fn generated_parameter_edits_check_actual_saved_values_and_rejections(){
     }
 }
 #[test]
+fn dynamic_parameter_metadata_check_remains_ascii_case_insensitive(){
+    let source=GOOD.replacen("param-domain-type='range' value='10'>",
+        "param-domain-type='range' value='10' SoUrCe-FiElD='[Injected]'>",1);
+    let book=checked_book(&source);
+    let error=book.parameter_state(crate::workbook::FieldId(4)).unwrap_err();
+    assert_eq!(error.code,"UNSUPPORTED_SHAPE");
+    assert!(error.message.contains("Dynamic parameter metadata"));
+}
+#[test]
 fn scalar_type_mismatch_is_not_coerced_to_a_working_parameter(){
     let (dir,app)=setup(GOOD);let b=checked_book(GOOD);let (c,d)=b.parameter_state(crate::workbook::FieldId(4)).unwrap();
     let e=plan(&app,GOOD,vec![json!({"op":"set_parameter","field_id":4,"expected_state_hash":crate::workbook::state_hash(&json!({"current":c,"domain":d})),

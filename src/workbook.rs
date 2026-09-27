@@ -570,8 +570,11 @@ impl Workbook {
             require(matches!(self.xml.tag(child), "calculation" | "members" | "range"), "UNSUPPORTED_SHAPE", "Only static parameters with known children are editable")?;
         }
         for attr in self.xml.attributes(n) {
-            let name = attr.name.to_ascii_lowercase();
-            require(!name.contains("source-field") && !name.contains("refresh") && !name.contains("dynamic"), "UNSUPPORTED_SHAPE", "Dynamic parameter metadata is not editable")?;
+            let name=attr.name;
+            require(!contains_ascii_case_insensitive(name,"source-field")
+                && !contains_ascii_case_insensitive(name,"refresh")
+                && !contains_ascii_case_insensitive(name,"dynamic"),
+                "UNSUPPORTED_SHAPE", "Dynamic parameter metadata is not editable")?;
         }
         let current = Scalar::parse(dtype, self.xml.required(n, "value")?)?;
         let calc = self.xml.one_child(n, "calculation")?;
@@ -673,12 +676,16 @@ impl Workbook {
                 Ok(())
             }
             "union" => {
-                let children: Vec<_> = self.xml.children(n).collect();
-                require(!children.is_empty() && children.len() <= 10_000, "UNSUPPORTED_SHAPE", "Empty or oversized union")?;
-                let l = self.xml.required(children[0], "level")?;
-                for child in children {
-                    require(self.xml.tag(child) == "groupfilter" && self.xml.value(child, "function") == Some("member"), "UNSUPPORTED_SHAPE", "Only a flat union of members is supported")?;
-                    self.members(child, Some(l), values)?;
+                let mut children=self.xml.children(n);
+                let first=children.next().ok_or_else(||Error::new("UNSUPPORTED_SHAPE","Empty or oversized union"))?;
+                let l=self.xml.required(first,"level")?;
+                let mut count=0usize;
+                for child in std::iter::once(first).chain(children) {
+                    count+=1;
+                    require(count<=10_000,"UNSUPPORTED_SHAPE","Empty or oversized union")?;
+                    require(self.xml.tag(child)=="groupfilter" && self.xml.value(child,"function")==Some("member"),
+                        "UNSUPPORTED_SHAPE","Only a flat union of members is supported")?;
+                    self.members(child,Some(l),values)?;
                 }
                 Ok(())
             }
@@ -837,6 +844,10 @@ impl Xml {
     fn one_child_or_first_member(&self, n: NodeId) -> Result<NodeId> {
         self.named_children(n, "groupfilter").next().ok_or_else(|| Error::new("UNSUPPORTED_SHAPE", "Missing filter member"))
     }
+}
+fn contains_ascii_case_insensitive(value:&str,needle:&str)->bool {
+    let needle=needle.as_bytes();
+    value.as_bytes().windows(needle.len()).any(|part|part.eq_ignore_ascii_case(needle))
 }
 fn unique(items: &[String]) -> bool {
     items.iter().collect::<BTreeSet<_>>().len() == items.len()
