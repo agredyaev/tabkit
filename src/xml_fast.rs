@@ -42,6 +42,7 @@ const NAME_CLASS:[u8;256]=name_classes();
 fn name_start(b:u8)->bool { NAME_CLASS[b as usize]&1!=0 }
 fn name_rest(b:u8)->bool { NAME_CLASS[b as usize]&2!=0 }
 
+#[inline(always)]
 fn qname<'a>(source:&'a str, mut p:usize)->FastResult<(&'a str,&'a str,usize)> {
     let bytes=source.as_bytes(); let start=p;
     // Tableau's dominant tags/attributes are a tiny stable vocabulary. Accept only an
@@ -76,9 +77,18 @@ fn qname<'a>(source:&'a str, mut p:usize)->FastResult<(&'a str,&'a str,usize)> {
     }
 }
 
+#[inline(always)]
 fn skip_ws(bytes:&[u8],p:&mut usize) { while *p<bytes.len() && ws(bytes[*p]) {*p+=1;} }
 
+pub(super) fn validate_characters(bytes:&[u8])->Result<()> {
+    require(!has_forbidden_ascii_control(bytes) && !has_forbidden_noncharacter(bytes),
+        "XML","XML 1.0 forbids this character")
+}
 pub(super) fn parse(source:&str,limits:&Limits)->Result<Option<Xml>> {
+    validate_characters(source.as_bytes())?;
+    parse_prechecked(source,limits)
+}
+pub(super) fn parse_prechecked(source:&str,limits:&Limits)->Result<Option<Xml>> {
     match parse_inner(source,limits) {
         Ok(v)=>Ok(Some(v)),
         Err(FastError::Unsupported)=>Ok(None),
@@ -88,9 +98,6 @@ pub(super) fn parse(source:&str,limits:&Limits)->Result<Option<Xml>> {
 
 fn parse_inner(source:&str,limits:&Limits)->FastResult<Xml> {
     let bytes=source.as_bytes();
-    if has_forbidden_ascii_control(bytes) || has_forbidden_noncharacter(bytes) {
-        return Err(FastError::Product(Error::new("XML","XML 1.0 forbids this character")));
-    }
     let mut b=Builder::new(source,limits); let mut p=0usize;
     if source.starts_with('\u{feff}') { p='\u{feff}'.len_utf8(); }
     // Keep declaration parsing on the established tokenizer unless it is the common explicit 1.0 form.
@@ -115,7 +122,7 @@ fn parse_inner(source:&str,limits:&Limits)->FastResult<Xml> {
         }
         if bytes.get(p..p+4)==Some(b"<!--") {
             let start=p+4; let rest=&source[start..]; let Some(off)=rest.find("-->") else { return Err(FastError::Unsupported); };
-            if rest[..off].contains("--") { return Err(FastError::Unsupported); }
+            if rest[..off].contains("--") || rest[..off].ends_with('-') { return Err(FastError::Unsupported); }
             b.count_node()?; if let Some(f)=b.stack.last_mut(){f.last_text=false;}
             p=start+off+3; continue;
         }

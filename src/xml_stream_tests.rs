@@ -69,6 +69,21 @@ fn node_budget_includes_non_element_nodes_and_document_root() {
     }
 }
 #[test]
+fn fast_path_does_not_accept_comment_content_ending_in_dash() {
+    let limits=Limits::default();
+    for source in [
+        "<workbook><!--invalid---></workbook>",
+        "<workbook><!--a--- ></workbook>",
+    ] {
+        assert!(Xml::parse(source.as_bytes().to_vec(),&limits).is_err(), "{source}");
+        assert!(roxmltree::Document::parse(source).is_err(), "oracle accepted {source}");
+    }
+    let valid="<workbook><!--valid comment--></workbook>";
+    assert!(Xml::parse(valid.as_bytes().to_vec(),&limits).is_ok());
+    assert!(roxmltree::Document::parse(valid).is_ok());
+}
+
+#[test]
 fn unsupported_vendor_bytes_are_checked_even_when_not_in_semantic_projection() {
     assert!(Xml::parse(b"<a><vendor x='&#0;'/></a>".to_vec(), &Limits::default()).is_err());
     assert!(Xml::parse(b"<a><!-- bad \x01 --></a>".to_vec(), &Limits::default()).is_err());
@@ -139,6 +154,22 @@ fn semantic_side_tables_match_full_node_scans() {
     assert_eq!(x.semantic.column_bindings,expected);
 }
 
+
+#[test]
+fn parallel_character_admission_matches_sequential_rejection() {
+    let limits=Limits::default();
+    for c in ['\u{1}','\u{fffe}','\u{ffff}'] {
+        let small=format!("<workbook>{c}</workbook>");
+        let mut large=String::with_capacity(300_100);
+        large.push_str("<workbook>");
+        large.extend(std::iter::repeat_n(' ',300_000));
+        large.push(c);
+        large.push_str("</workbook>");
+        let a=Xml::parse(small.into_bytes(),&limits).err().expect("small invalid character accepted");
+        let b=Xml::parse(large.into_bytes(),&limits).err().expect("parallel invalid character accepted");
+        assert_eq!((a.code,a.message.as_str()),(b.code,b.message.as_str()));
+    }
+}
 #[test]
 fn sequential_and_parallel_parse_paths_bind_digest_to_exact_source_bytes() {
     for repeats in [1usize, 20_000] {

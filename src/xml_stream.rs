@@ -34,9 +34,13 @@ pub(super) fn parse(bytes:Vec<u8>,limits:&Limits)->Result<Xml>{
     }
     let (mut result,sha256)=std::thread::scope(|scope|{
         let source=text.as_str();
-        let digest=scope.spawn(move ||crate::fs::sha256(source.as_bytes()));
-        let parsed=parse_text_without_hash(source,limits);
-        let sha256=digest.join().map_err(|_|Error::new("INTERNAL","Hash worker failed"))?;
+        let digest=scope.spawn(move ||{
+            fast::validate_characters(source.as_bytes())?;
+            Ok::<_,Error>(crate::fs::sha256(source.as_bytes()))
+        });
+        // Character admission is performed by the parallel worker for this large-input path.
+        let parsed=parse_text_without_hash(source,limits,true);
+        let sha256=digest.join().map_err(|_|Error::new("INTERNAL","Hash worker failed"))??;
         Ok::<_,Error>((parsed?,sha256))
     })?;
     result.sha256=sha256;result.text=text;Ok(result)
@@ -48,12 +52,13 @@ pub(super) fn parse_with_sha256(bytes:Vec<u8>,limits:&Limits,sha256:String)->Res
     parse_text(text,limits,sha256)
 }
 fn parse_text(text:String,limits:&Limits,sha256:String)->Result<Xml>{
-    let mut result=parse_text_without_hash(&text,limits)?;
+    let mut result=parse_text_without_hash(&text,limits,false)?;
     result.sha256=sha256;result.text=text;Ok(result)
 }
-fn parse_text_without_hash(text:&str,limits:&Limits)->Result<Xml>{
+fn parse_text_without_hash(text:&str,limits:&Limits,characters_checked:bool)->Result<Xml>{
     check_encoding_declaration(text)?;
-    if let Some(result)=fast::parse(text,limits)? { return Ok(result); }
+    let fast=if characters_checked {fast::parse_prechecked(text,limits)} else {fast::parse(text,limits)}?;
+    if let Some(result)=fast { return Ok(result); }
     Builder::new(text,limits).run()
 }
 impl<'a> Builder<'a> {
