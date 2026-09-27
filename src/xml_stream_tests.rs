@@ -98,3 +98,19 @@ fn tokenizer_rejects_literal_lt_in_attribute_without_a_second_scan() {
         assert!(Xml::parse(source.as_bytes().to_vec(),&Limits::default()).is_err(),"{source}");
     }
 }
+
+#[test]
+fn semantic_side_tables_match_full_node_scans() {
+    let source="<workbook><datasources><datasource name='d'><metadata-record class='column'/></datasource></datasources><worksheets><worksheet name='s'><table><view><datasource-dependencies datasource='d'><column name='[x]'/><column-instance name='[i]' column='[x]'/><filter class='categorical' column='[d].[i]'/></datasource-dependencies><rows>[d].[i]</rows></view></table></worksheet></worksheets><dashboards><dashboard name='d'/></dashboards></workbook>";
+    let x=Xml::parse(source.as_bytes().to_vec(),&Limits::default()).unwrap();
+    let by=|tag:&str|x.nodes.iter().enumerate().filter_map(|(i,_)|(x.tag(NodeId(i as u32))==tag).then_some(NodeId(i as u32))).collect::<Vec<_>>();
+    assert_eq!(x.semantic.datasource_dependencies,by("datasource-dependencies"));
+    assert_eq!(x.semantic.column_instances,by("column-instance"));
+    assert_eq!(x.semantic.shelves,[by("rows"),by("cols")].concat());
+    assert_eq!(x.semantic.worksheets,by("worksheet"));
+    assert_eq!(x.semantic.dashboards,by("dashboard"));
+    assert_eq!(x.semantic.filters,by("filter"));
+    assert_eq!(x.semantic.metadata_records,by("metadata-record"));
+    let expected:Vec<_>=x.nodes.iter().enumerate().filter_map(|(i,_)|{let id=NodeId(i as u32);(x.tag(id)!="column-instance"&&x.value(id,"column").is_some()).then_some(id)}).collect();
+    assert_eq!(x.semantic.column_bindings,expected);
+}

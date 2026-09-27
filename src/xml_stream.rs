@@ -37,7 +37,8 @@ impl<'a> Builder<'a> {
     fn new(source: &'a str, limits: &'a Limits) -> Self {
         Self { source, limits, result: Xml { text: String::new(), nodes: Vec::new(),
             normalized: Normalized::default(), names: Names::default(), leaf_texts: Vec::new(),
-            leaf_text: String::new(), worksheet_owners: Vec::new(), dependency_owners: Vec::new(), sha256: String::new() },
+            leaf_text: String::new(), worksheet_owners: Vec::new(), dependency_owners: Vec::new(),
+            semantic: SemanticNodes::default(), sha256: String::new() },
             bindings: BTreeMap::from([("xml", 1)]), undo: Vec::new(),
             uri_ids: BTreeMap::from([(String::new(), 0), (XML_URI.to_owned(), 1)]),
             uris: vec![String::new(), XML_URI.to_owned()], tag_ids: BTreeMap::new(),
@@ -168,6 +169,22 @@ impl<'a> Builder<'a> {
                 self.result.names.strings.push(if ns == 0 { f.local.to_owned() } else { format!("{{{}}}{}", self.uris[ns as usize], f.local) });
                 self.tag_ids.insert(key, id); id }
         };
+        if ns==0 {
+            let semantic=&mut self.result.semantic;
+            match f.local {
+                "datasource-dependencies"=>semantic.datasource_dependencies.push(f.id),
+                "column-instance"=>semantic.column_instances.push(f.id),
+                "rows"|"cols"=>semantic.shelves.push(f.id),
+                "worksheet"=>semantic.worksheets.push(f.id),
+                "dashboard"=>semantic.dashboards.push(f.id),
+                "filter"=>semantic.filters.push(f.id),
+                "metadata-record"=>semantic.metadata_records.push(f.id),
+                _=>{}
+            }
+            if f.local!="column-instance" && self.attrs.iter().any(|a|a.prefix.is_empty()&&a.local=="column") {
+                semantic.column_bindings.push(f.id);
+            }
+        }
         let n = &mut self.result.nodes[f.id.0 as usize];
         n.name = name; n.attributes.end = self.attribute_count;
         n.raw_attributes.end = span.start as u32;

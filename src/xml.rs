@@ -72,6 +72,17 @@ struct Normalized {
     spans: Vec<Span>,
     text: String,
 }
+#[derive(Default)]
+pub(crate) struct SemanticNodes {
+    pub datasource_dependencies: Vec<NodeId>,
+    pub column_instances: Vec<NodeId>,
+    pub column_bindings: Vec<NodeId>,
+    pub shelves: Vec<NodeId>,
+    pub worksheets: Vec<NodeId>,
+    pub dashboards: Vec<NodeId>,
+    pub filters: Vec<NodeId>,
+    pub metadata_records: Vec<NodeId>,
+}
 pub struct Xml {
     pub text: String,
     pub nodes: Vec<Node>,
@@ -81,6 +92,7 @@ pub struct Xml {
     leaf_text: String,
     worksheet_owners: Vec<Option<NodeId>>,
     dependency_owners: Vec<Option<NodeId>>,
+    pub(crate) semantic: SemanticNodes,
     pub sha256: String,
 }
 impl Xml {

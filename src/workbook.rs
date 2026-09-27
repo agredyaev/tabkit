@@ -175,18 +175,10 @@ impl Workbook {
             }
             // Physical columns not materialized as global <column> still resolve references.
             let ds_span = xml.node(ds).span;
-            for idx in ds.0 as usize+1..xml.nodes.len() {
-                let n = NodeId(idx as u32);
-                if xml.node(n).span.start >= ds_span.end {
-                    break;
-                }
-                if xml.tag(n) != "metadata-record" || xml.value(n, "class") != Some("column") {
-                    continue;
-                }
-                let span = xml.node(n).span;
-                if !(ds_span.start < span.start && span.end <= ds_span.end) {
-                    continue;
-                }
+            for &n in &xml.semantic.metadata_records {
+                let span=xml.node(n).span;
+                if !(ds_span.start < span.start && span.end <= ds_span.end)
+                    || xml.value(n,"class")!=Some("column") { continue; }
                 let local = xml.named_children(n, "local-name").next();
                 let Some(local) = local else {
                     continue;
@@ -217,9 +209,7 @@ impl Workbook {
         let mut dependency_scopes = Vec::new();
         let mut dependency_fields = Vec::new();
         let mut local_definitions = Vec::new();
-        for idx in 0..xml.nodes.len() {
-            let scope = NodeId(idx as u32);
-            if xml.tag(scope) != "datasource-dependencies" { continue; }
+        for &scope in &xml.semantic.datasource_dependencies {
             let ds_name = xml.value(scope, "datasource");
             let ds = ds_name.and_then(|n| ds_ids.get(n)).copied();
             let worksheet = xml.ancestor(scope, "worksheet");
@@ -248,11 +238,7 @@ impl Workbook {
         }
         // Build worksheet instance resolution once; avoid a document scan per filter.
         let mut instances:BTreeMap<(NodeId,DatasourceId), BTreeMap<String,BTreeSet<FieldId>>>=BTreeMap::new();
-        for idx in 0..xml.nodes.len(){
-            let n=NodeId(idx as u32);
-            if xml.tag(n)!="column-instance"{
-                continue;
-            }
+        for &n in &xml.semantic.column_instances {
             let Some(sheet)=xml.ancestor(n,"worksheet") else{
                 continue;
             };
@@ -269,31 +255,31 @@ impl Workbook {
             }
         }
         let mut known_uses = Vec::new();
-        for idx in 0..xml.nodes.len() {
-            let n = NodeId(idx as u32);
-            let Some(sheet) = xml.ancestor(n,"worksheet") else { continue; };
-            let resolve_qualified = |ds:&str, instance:&str| -> Option<FieldId> {
-                let dsid = *ds_ids.get(ds)?;
-                field_ids[dsid.0 as usize].get(instance).copied().or_else(|| {
-                    let ids = instances.get(&(sheet,dsid))?.get(instance)?;
-                    (ids.len()==1).then(||ids.iter().next().copied()).flatten()
-                })
-            };
-            if xml.tag(n) != "column-instance" {
-                if let Some(column) = xml.value(n, "column") {
-                    if let Ok((ds,field)) = formula::qualified(column) {
-                        if let Some(field_id) = resolve_qualified(&ds,&field) {
-                            known_uses.push(FieldUse { field_id,worksheet_node:sheet,node_id:n,kind:"column_binding" });
-                        }
+        let resolve_qualified = |sheet:NodeId,ds:&str, instance:&str| -> Option<FieldId> {
+            let dsid = *ds_ids.get(ds)?;
+            field_ids[dsid.0 as usize].get(instance).copied().or_else(|| {
+                let ids = instances.get(&(sheet,dsid))?.get(instance)?;
+                (ids.len()==1).then(||ids.iter().next().copied()).flatten()
+            })
+        };
+        for &n in &xml.semantic.column_bindings {
+            let Some(sheet)=xml.ancestor(n,"worksheet") else {continue;};
+            if let Some(column)=xml.value(n,"column") {
+                if let Ok((ds,field))=formula::qualified(column) {
+                    if let Some(field_id)=resolve_qualified(sheet,&ds,&field) {
+                        known_uses.push(FieldUse{field_id,worksheet_node:sheet,node_id:n,kind:"column_binding"});
                     }
                 }
             }
-            if matches!(xml.tag(n),"rows"|"cols") && xml.node(n).first_child.is_none() {
-                if let Ok(a) = formula::analyze(xml.text_content(n)?) {
+        }
+        for &n in &xml.semantic.shelves {
+            let Some(sheet)=xml.ancestor(n,"worksheet") else {continue;};
+            if xml.node(n).first_child.is_none() {
+                if let Ok(a)=formula::analyze(xml.text_content(n)?) {
                     for r in a.references {
-                        if let Some(ds) = r.datasource {
-                            if let Some(field_id) = resolve_qualified(&ds,&r.field) {
-                                known_uses.push(FieldUse { field_id,worksheet_node:sheet,node_id:n,kind:"shelf" });
+                        if let Some(ds)=r.datasource {
+                            if let Some(field_id)=resolve_qualified(sheet,&ds,&r.field) {
+                                known_uses.push(FieldUse{field_id,worksheet_node:sheet,node_id:n,kind:"shelf"});
                             }
                         }
                     }
@@ -302,44 +288,28 @@ impl Workbook {
         }
         known_uses.sort_by_key(|u|(u.field_id,u.worksheet_node,u.node_id,u.kind));
         known_uses.dedup_by_key(|u|(u.field_id,u.worksheet_node,u.node_id,u.kind));
-        let mut worksheets = Vec::new();
-        let mut dashboards = Vec::new();
-        let mut filters = Vec::new();
-        for idx in 0..xml.nodes.len() {
-            let n = NodeId(idx as u32);
-            match xml.tag(n) {
-                "worksheet" => worksheets.push(xml.required(n, "name")?.into()),
-                "dashboard" => dashboards.push(xml.required(n, "name")?.into()),
-                "filter" => {
-                    let Some(sheet) = xml.ancestor(n, "worksheet") else {
-                        continue;
-                    };
-                    let column = xml.value(n, "column").unwrap_or("").to_string();
-                    let mut field = None;
-                    if let Ok((ds, instance)) = formula::qualified(&column) {
-                        if let Some(dsid) = ds_ids.get(&ds) {
-                            field = field_ids[dsid.0 as usize].get(instance.as_str()).copied();
-                            if field.is_none() {
-                                if let Some(resolved)=instances.get(&(sheet,*dsid)).and_then(|m|m.get(instance.as_str())) {
-                                    if resolved.len()==1 {
-                                        field=resolved.iter().next().copied();
-                                    }
-                                }
-                            }
+        let worksheets:Vec<String>=xml.semantic.worksheets.iter()
+            .map(|&n|xml.required(n,"name").map(str::to_owned)).collect::<Result<_>>()?;
+        let dashboards:Vec<String>=xml.semantic.dashboards.iter()
+            .map(|&n|xml.required(n,"name").map(str::to_owned)).collect::<Result<_>>()?;
+        let mut filters=Vec::with_capacity(xml.semantic.filters.len());
+        for &n in &xml.semantic.filters {
+            let Some(sheet)=xml.ancestor(n,"worksheet") else {continue;};
+            let column=xml.value(n,"column").unwrap_or("").to_string();
+            let mut field=None;
+            if let Ok((ds,instance))=formula::qualified(&column) {
+                if let Some(dsid)=ds_ids.get(&ds) {
+                    field=field_ids[dsid.0 as usize].get(instance.as_str()).copied();
+                    if field.is_none() {
+                        if let Some(resolved)=instances.get(&(sheet,*dsid)).and_then(|m|m.get(instance.as_str())) {
+                            if resolved.len()==1 {field=resolved.iter().next().copied();}
                         }
                     }
-                    filters.push(Filter {
-                        id: FilterId(filters.len() as u32),
-                        node: n,
-                        worksheet: xml.required(sheet, "name")?.into(),
-                        column,
-                        field,
-                        kind: xml.value(n, "class").unwrap_or("unknown").into()
-                    });
                 }
-                _ => {
-                },
             }
+            filters.push(Filter{id:FilterId(filters.len() as u32),node:n,
+                worksheet:xml.required(sheet,"name")?.into(),column,field,
+                kind:xml.value(n,"class").unwrap_or("unknown").into()});
         }
         require(unique(&worksheets) && unique(&dashboards), "AMBIGUOUS_TARGET", "Duplicate worksheet or dashboard names")?;
         let mut w = Self {
