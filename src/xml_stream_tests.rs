@@ -93,6 +93,30 @@ fn tokenizer_rejects_forbidden_xml_characters_without_a_prescan() {
 }
 
 #[test]
+fn fast_path_rejects_every_forbidden_ascii_control_and_xml_noncharacter() {
+    let limits=Limits::default();
+    for byte in (0u8..32).filter(|b|!matches!(*b,9|10|13)) {
+        for mut source in [
+            b"<workbook>x</workbook>".to_vec(),
+            b"<workbook a='x'/>".to_vec(),
+            b"<workbook><!--x--></workbook>".to_vec(),
+            b"<workbook><![CDATA[x]]></workbook>".to_vec(),
+        ] {
+            let at=source.iter().position(|b|*b==b'x').unwrap();
+            source[at]=byte;
+            assert!(super::stream::fast_for_test(source,&limits).is_err(),"accepted control byte {byte}");
+        }
+    }
+    for c in ['\u{fffe}','\u{ffff}'] {
+        let source=format!("<workbook a='{c}'>{c}</workbook>");
+        assert!(super::stream::fast_for_test(source.into_bytes(),&limits).is_err(),"accepted U+{:04X}",c as u32);
+    }
+    for source in ["<workbook>\t\n\r</workbook>","<workbook a='\t\n\r'/>"] {
+        assert!(super::stream::fast_for_test(source.as_bytes().to_vec(),&limits).unwrap().is_some());
+    }
+}
+
+#[test]
 fn tokenizer_rejects_literal_lt_in_attribute_without_a_second_scan() {
     for source in [r#"<workbook a='bad<value'/>"#,r#"<workbook a="bad<value"/>"#] {
         assert!(Xml::parse(source.as_bytes().to_vec(),&Limits::default()).is_err(),"{source}");

@@ -7,6 +7,28 @@ impl From<Error> for FastError { fn from(e:Error)->Self { Self::Product(e) } }
 type FastResult<T>=std::result::Result<T,FastError>;
 
 fn ws(b:u8)->bool { matches!(b,b' '|b'\t'|b'\n'|b'\r') }
+#[inline]
+fn has_forbidden_ascii_control(bytes:&[u8])->bool {
+    const HIGHS:u64=0x8080808080808080;
+    const LIMIT:u64=0x2020202020202020;
+    let (chunks,tail)=bytes.as_chunks::<8>();
+    for &chunk in chunks {
+        let word=u64::from_ne_bytes(chunk);
+        if word.wrapping_sub(LIMIT)&!word&HIGHS!=0
+            && chunk.iter().any(|b|*b<32&&!matches!(*b,9|10|13)) { return true; }
+    }
+    tail.iter().any(|b|*b<32&&!matches!(*b,9|10|13))
+}
+#[inline]
+fn has_forbidden_noncharacter(bytes:&[u8])->bool {
+    let mut offset=0usize;
+    while let Some(found)=memchr::memchr(0xef,&bytes[offset..]) {
+        let p=offset+found;
+        if bytes.get(p+1)==Some(&0xbf) && matches!(bytes.get(p+2),Some(0xbe|0xbf)) { return true; }
+        offset=p+1;
+    }
+    false
+}
 fn name_start(b:u8)->bool { b.is_ascii_alphabetic() || b==b'_' }
 fn name_rest(b:u8)->bool { name_start(b) || b.is_ascii_digit() || matches!(b,b'-'|b'.') }
 
@@ -38,7 +60,7 @@ pub(super) fn parse(source:&str,limits:&Limits)->Result<Option<Xml>> {
 
 fn parse_inner(source:&str,limits:&Limits)->FastResult<Xml> {
     let bytes=source.as_bytes();
-    if bytes.iter().any(|b|*b<32&&!matches!(*b,9|10|13)) || source.contains(['\u{fffe}','\u{ffff}']) {
+    if has_forbidden_ascii_control(bytes) || has_forbidden_noncharacter(bytes) {
         return Err(FastError::Product(Error::new("XML","XML 1.0 forbids this character")));
     }
     let mut b=Builder::new(source,limits); let mut p=0usize;
