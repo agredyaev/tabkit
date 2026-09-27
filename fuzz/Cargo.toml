@@ -123,3 +123,7 @@ path = "fuzz_targets/edit_sequences.rs"
 test = false
 doc = false
 bench = false
+
+# Runtime-detected ARM SHA-256 acceleration; portable software fallback remains.
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+sha2 = { version = "0.10", features = ["asm"] }
