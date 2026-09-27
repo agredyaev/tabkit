@@ -52,3 +52,8 @@ The Hyper build needs the official SDK/library/runtime and has not been built.
 PAT supplied via a Quick env setting is stored in that setting; keep secret out of argv.
 Next: read-only real Tableau access, real 2025 book corpus, explicit test project
 publish, native Hyper lifecycle, then actual Quick integration.
+
+## Requirements and architecture
+
+- [MoSCoW requirements registry](docs/requirements/REQUIREMENTS.md)
+- [Architecture Decision Records](docs/adr/README.md)
