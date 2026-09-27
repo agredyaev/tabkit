@@ -14,7 +14,7 @@ The original DOM-style admission retained too much memory and performed excessiv
 - Retain original bytes plus compact element/link/owner/span indices required by product behavior.
 - Do not retain ordinary attribute strings/rows; scan admitted start-tag spans and store only sparse normalized values.
 - Keep the independent DOM parser in developer tests as an oracle, not in the production hot path.
-- Candidate product proof may use admitted source + typed bounded delta instead of a second full production reparse; full re-admission stays in tests.
+- Candidate product proof uses admitted source + typed bounded delta instead of a second full production reparse; full re-admission stays in tests.
 
 ## Consequences
 

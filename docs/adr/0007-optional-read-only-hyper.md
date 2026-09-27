@@ -4,7 +4,7 @@ Status: Accepted
 
 ## Context
 
-Hyper access requires Tableau's native SDK/runtime and should not become a mandatory dependency of local workbook editing or create an SQL write surface.
+Hyper access requires Tableau's native SDK/runtime. It remains optional and read-only; local workbook editing must not depend on it.
 
 ## Decision
 

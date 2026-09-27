@@ -18,7 +18,7 @@ Workbook/XML processing is dominated by sequential scans, identity lookup, depen
 
 ## Consequences
 
-- Some builder/admission structures differ from frozen runtime structures.
+- Builder/admission structures may differ from frozen runtime structures only when their shorter lifetime or lookup role justifies separate storage.
 - Fast paths carry explicit equivalence tests.
 - Performance work must remove demonstrated work/state rather than add speculative infrastructure.
 
