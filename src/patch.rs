@@ -33,27 +33,41 @@ pub fn apply(input: &str, expected_hash: &str, patches: &[Patch], max: u64) -> R
     require(sha256(input.as_bytes()) == expected_hash, "STALE_BASE", "TWB hash changed")?;
     Ok(apply_admitted(input, patches, max)?.0)
 }
-/// Apply bytes already owned by an admitted immutable document. Hash the candidate while emitting it.
-pub fn apply_admitted(input: &str, patches: &[Patch], max: u64) -> Result<(String,String)> {
-    let mut sorted: Vec<&Patch> = patches.iter().collect();
-    sorted.sort_by_key(|p| (p.span.start, p.span.end));
-    let mut cursor = 0usize;
-    let mut length = input.len() as u64;
+fn admitted_layout<'a>(input:&str,patches:&'a [Patch],max:u64)->Result<(Vec<&'a Patch>,usize)> {
+    let mut sorted:Vec<&Patch>=patches.iter().collect();
+    sorted.sort_by_key(|p|(p.span.start,p.span.end));
+    let mut cursor=0usize; let mut length=input.len() as u64;
     for p in &sorted {
-        let r = p.span.range();
-        require(r.start >= cursor && r.start <= r.end && r.end <= input.len(), "PATCH_OVERLAP", "Overlapping or invalid byte ranges")?;
-        let original = input.get(r.clone()).ok_or_else(|| Error::new("PATCH_BOUNDARY", "Patch splits UTF-8 character"))?;
-        require(original == p.expected, "STALE_PRECONDITION", "Expected patch bytes changed")?;
-        length = length.checked_sub((r.end-r.start) as u64)
+        let r=p.span.range();
+        require(r.start>=cursor&&r.start<=r.end&&r.end<=input.len(),"PATCH_OVERLAP","Overlapping or invalid byte ranges")?;
+        let original=input.get(r.clone()).ok_or_else(||Error::new("PATCH_BOUNDARY","Patch splits UTF-8 character"))?;
+        require(original==p.expected,"STALE_PRECONDITION","Expected patch bytes changed")?;
+        length=length.checked_sub((r.end-r.start) as u64)
             .and_then(|v|v.checked_add(p.replacement.len() as u64))
             .ok_or_else(||Error::new("LIMIT","Patched XML size overflow"))?;
-        cursor = r.end;
+        cursor=r.end;
     }
-    require(length <= max && length <= usize::MAX as u64,"LIMIT","Patched XML exceeds limit")?;
+    require(length<=max&&length<=usize::MAX as u64,"LIMIT","Patched XML exceeds limit")?;
+    Ok((sorted,length as usize))
+}
+/// Hash the deterministic virtual candidate without materializing its full byte buffer.
+pub fn hash_admitted(input:&str,patches:&[Patch],max:u64)->Result<String>{
+    let (sorted,_)=admitted_layout(input,patches,max)?;
+    let mut digest=Sha256::new(); let mut cursor=0usize;
+    for p in sorted {
+        let r=p.span.range(); digest.update(input[cursor..r.start].as_bytes());
+        digest.update(p.replacement.as_bytes()); cursor=r.end;
+    }
+    digest.update(input[cursor..].as_bytes());
+    Ok(digest_hex(digest.finalize().into()))
+}
+/// Apply bytes already owned by an admitted immutable document. Hash the candidate while emitting it.
+pub fn apply_admitted(input: &str, patches: &[Patch], max: u64) -> Result<(String,String)> {
+    let (sorted,length)=admitted_layout(input,patches,max)?;
     let mut out = String::new();
-    out.try_reserve_exact(length as usize).map_err(|_|Error::new("LIMIT","Cannot reserve candidate buffer"))?;
+    out.try_reserve_exact(length).map_err(|_|Error::new("LIMIT","Cannot reserve candidate buffer"))?;
     let mut digest = Sha256::new();
-    cursor = 0;
+    let mut cursor = 0;
     for p in sorted {
         let r=p.span.range();
         let unchanged=&input[cursor..r.start];

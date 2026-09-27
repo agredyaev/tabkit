@@ -96,6 +96,21 @@ fn product_candidate_matches_full_candidate_re_admission_oracle() {
     assert!(crate::validation::local(&after).passed);
 }
 #[test]
+fn digest_only_product_plan_matches_materialized_candidate_and_full_oracle() {
+    let config=cfg(); let hash=fs::sha256(GOOD.as_bytes());
+    let source=Workbook::parse(GOOD.as_bytes().to_vec(),&config.limits).unwrap();
+    let changes=representative_batch(&source,&hash);
+    let digest_only=edit::plan_product("in.twb",&hash,source,changes.clone(),&config).unwrap();
+    let (materialized,candidate)=edit::plan_product_owned("in.twb",&hash,
+        Workbook::parse(GOOD.as_bytes().to_vec(),&config.limits).unwrap(),changes.clone(),&config).unwrap();
+    let (full,after)=edit::plan_owned("in.twb",&hash,
+        Workbook::parse(GOOD.as_bytes().to_vec(),&config.limits).unwrap(),changes,&config).unwrap();
+    assert_eq!(digest_only,materialized);
+    assert_eq!(digest_only,full);
+    assert_eq!(digest_only.candidate_twb_sha256,candidate.sha256());
+    assert_eq!(candidate.sha256(),after.xml.sha256);
+}
+#[test]
 fn product_candidate_errors_match_full_oracle_for_graph_and_preconditions() {
     let config=cfg(); let hash=fs::sha256(GOOD.as_bytes());
     for formula in ["[Calculation_Ratio]","[Missing]"] {

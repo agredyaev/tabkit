@@ -306,7 +306,7 @@ impl App{
             "workbook_plan"=>{
                 let a:PlanRequest=parse(args)?;
                 let(pkg,book)=self.load(&a.input)?;
-                let(plan,_)=edit::plan_product_owned(&a.input,&pkg.sha256,book,a.changes,&self.cfg)?;
+                let plan=edit::plan_product(&a.input,&pkg.sha256,book,a.changes,&self.cfg)?;
                 let bytes=wire::encode(&plan,self.cfg.limits.plan_json_bytes as usize,true)?;
                 let mut result=json!({"output":a.output,"plan_sha256":fs::sha256(&bytes),
                     "candidate_twb_sha256":plan.candidate_twb_sha256,"delta":plan.delta,

@@ -125,6 +125,15 @@ pub fn plan_owned(input: &str, package_sha256: &str, book: Workbook, changes: Ch
     drop(source);
     complete(input, before, before_checks, prepared, candidate, cfg)
 }
+/// Product planning path: compute the reviewed candidate digest without retaining candidate bytes.
+pub fn plan_product(input:&str,package_sha256:&str,book:Workbook,
+    changes:ChangeSet,cfg:&Config)->Result<Plan>{
+    let prepared=prepare(package_sha256,&book,changes,cfg)?;
+    let source=book.into_xml().into_text();
+    let sha256=patch::hash_admitted(&source,&prepared.patches,cfg.limits.xml_bytes)?;
+    drop(source);
+    complete_prechecked(input,prepared,&sha256)
+}
 /// Product path: candidate semantics are proven from the admitted source plus bounded typed patches.
 pub fn plan_product_owned(input: &str, package_sha256: &str, book: Workbook,
     changes: ChangeSet, cfg: &Config) -> Result<(Plan, Candidate)> {
