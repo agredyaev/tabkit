@@ -75,3 +75,26 @@ fn unsupported_vendor_bytes_are_checked_even_when_not_in_semantic_projection() {
     assert!(Xml::parse(b"<a><vendor>&undeclared;</vendor></a>".to_vec(), &Limits::default()).is_err());
     assert!(Xml::parse(b"<!DOCTYPE a><a/>".to_vec(), &Limits::default()).is_err());
 }
+
+#[test]
+fn tokenizer_rejects_forbidden_xml_characters_without_a_prescan() {
+    for c in ['\u{1}','\u{b}','\u{c}','\u{fffe}','\u{ffff}'] {
+        for source in [
+            format!("<workbook>{c}</workbook>"),
+            format!("<workbook a='{c}'/>"),
+            format!("<workbook><![CDATA[{c}]]></workbook>"),
+            format!("<workbook><!--{c}--></workbook>"),
+            format!("<workbook><?p {c}?></workbook>"),
+        ] {
+            assert!(Xml::parse(source.into_bytes(),&Limits::default()).is_err(),
+                "accepted U+{:04X}",c as u32);
+        }
+    }
+}
+
+#[test]
+fn tokenizer_rejects_literal_lt_in_attribute_without_a_second_scan() {
+    for source in [r#"<workbook a='bad<value'/>"#,r#"<workbook a="bad<value"/>"#] {
+        assert!(Xml::parse(source.as_bytes().to_vec(),&Limits::default()).is_err(),"{source}");
+    }
+}

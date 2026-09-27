@@ -27,8 +27,6 @@ pub(super) fn parse_with_sha256(bytes: Vec<u8>, limits: &Limits, sha256: String)
     require(bytes.len() as u64 <= limits.xml_bytes && bytes.len() <= u32::MAX as usize,
         "LIMIT", "TWB is too large")?;
     let text = String::from_utf8(bytes).map_err(|_| Error::new("ENCODING", "Only UTF-8 TWB is supported; no implicit transcoding"))?;
-    require(!text.bytes().any(|b| b < 32 && !matches!(b, 9 | 10 | 13))
-        && !text.contains(['\u{fffe}', '\u{ffff}']), "XML", "XML 1.0 forbids this character")?;
     check_encoding_declaration(&text)?;
     let mut result = Builder::new(&text, limits).run()?;
     result.sha256 = sha256; result.text = text;
@@ -105,7 +103,6 @@ impl<'a> Builder<'a> {
     fn attribute(&mut self, prefix: &'a str, local: &'a str, value: Range<usize>) -> Result<()> {
         require(self.pending.is_some(), "XML", "Attribute outside a start tag")?;
         let raw = &self.source[value.clone()];
-        require(!raw.contains('<'), "XML", "Literal '<' in an attribute")?;
         let decoded = if raw.contains(['&', '\r', '\n', '\t']) {
             let pool = &mut self.result.normalized;
             let begin = pool.text.len(); decode_attribute(raw, &mut pool.text)?;
@@ -152,10 +149,10 @@ impl<'a> Builder<'a> {
         for a in &self.attrs {
             let declaration = a.prefix == "xmlns" || (a.prefix.is_empty() && a.local == "xmlns");
             let ns = if declaration { u32::MAX } else { self.namespace(a.prefix, false)? };
-            self.expanded.push((ns, a.local));
+            let expanded=(ns,a.local);
+            require(!self.expanded.contains(&expanded), "XML", "Duplicate expanded attribute name")?;
+            self.expanded.push(expanded);
         }
-        self.expanded.sort_unstable();
-        require(!self.expanded.windows(2).any(|p| p[0] == p[1]), "XML", "Duplicate expanded attribute name")?;
         let ns = self.namespace(f.prefix, true)?;
         require(f.id != NodeId(0) || ns == 0, "UNSUPPORTED_SHAPE", "Namespaced workbook roots are unsupported")?;
         let key = (ns, f.local);
