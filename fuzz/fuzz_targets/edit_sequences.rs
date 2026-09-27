@@ -29,7 +29,7 @@ fuzz_target!(|data:&[u8]|{
     ];
     ops.rotate_left((at(6)%4) as usize);
     let input_hash=fs::sha256(source.as_bytes());
-    let (plan,after)=edit::plan("in.twb",&input_hash,&book,ChangeSet{schema_version:1,input_sha256:input_hash.clone(),operations:ops.clone()},&cfg).unwrap();
+    let (plan,after)=edit::plan_owned("in.twb",&input_hash,book,ChangeSet{schema_version:1,input_sha256:input_hash.clone(),operations:ops.clone()},&cfg).unwrap();
     // Independently assemble byte replacements; do not reuse the product writer.
     let mut oracle=source.as_bytes().to_vec();let mut patches:Vec<_>=plan.patches.iter().collect();
     patches.sort_by_key(|p|p.span.start);
