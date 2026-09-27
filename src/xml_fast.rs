@@ -29,8 +29,18 @@ fn has_forbidden_noncharacter(bytes:&[u8])->bool {
     }
     false
 }
-fn name_start(b:u8)->bool { b.is_ascii_alphabetic() || b==b'_' }
-fn name_rest(b:u8)->bool { name_start(b) || b.is_ascii_digit() || matches!(b,b'-'|b'.') }
+const fn name_classes()->[u8;256] {
+    let mut table=[0u8;256]; let mut i=0usize;
+    while i<256 { let b=i as u8;
+        table[i]=if (b>=b'A'&&b<=b'Z')||(b>=b'a'&&b<=b'z')||b==b'_' {3}
+            else if (b>=b'0'&&b<=b'9')||b==b'-'||b==b'.' {2} else {0};
+        i+=1;
+    }
+    table
+}
+const NAME_CLASS:[u8;256]=name_classes();
+fn name_start(b:u8)->bool { NAME_CLASS[b as usize]&1!=0 }
+fn name_rest(b:u8)->bool { NAME_CLASS[b as usize]&2!=0 }
 
 fn qname<'a>(source:&'a str, mut p:usize)->FastResult<(&'a str,&'a str,usize)> {
     let bytes=source.as_bytes(); let start=p;
