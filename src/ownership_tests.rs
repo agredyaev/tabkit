@@ -65,3 +65,46 @@ fn admitted_formula_override_preflight_matches_candidate_graph_failures() {
         assert_eq!(e.code,code);
     }
 }
+
+fn representative_batch(book:&Workbook,hash:&str)->ChangeSet{
+    let (current,domain)=book.parameter_state(crate::workbook::FieldId(4)).unwrap();
+    ChangeSet{schema_version:1,input_sha256:hash.into(),operations:vec![
+        Operation::SetCalculation{field_id:FieldId(3),expected_formula:"[Profit] / [Sales]".into(),
+            formula:"[Profit] / ([Sales] + 1)".into()},
+        Operation::SetParameter{field_id:FieldId(4),
+            expected_state_hash:crate::workbook::state_hash(&json!({"current":current,"domain":domain})),
+            current:Some(crate::scalar::Scalar::Integer(7)),domain:None},
+        Operation::SetFilterValues{filter_id:crate::workbook::FilterId(0),
+            expected_state_hash:crate::workbook::state_hash(&book.filter_state(crate::workbook::FilterId(0)).unwrap()),
+            values:vec!["East".into(),"West".into()]},
+        Operation::SetFilterRange{filter_id:crate::workbook::FilterId(1),
+            expected_state_hash:crate::workbook::state_hash(&book.filter_state(crate::workbook::FilterId(1)).unwrap()),
+            min:crate::scalar::Scalar::Real("-2".into()),max:crate::scalar::Scalar::Real("77".into())},
+    ]}
+}
+#[test]
+fn product_candidate_matches_full_candidate_re_admission_oracle() {
+    let config=cfg(); let hash=fs::sha256(GOOD.as_bytes());
+    let source=Workbook::parse(GOOD.as_bytes().to_vec(),&config.limits).unwrap();
+    let changes=representative_batch(&source,&hash);
+    let (full,after)=edit::plan_owned("in.twb",&hash,
+        Workbook::parse(GOOD.as_bytes().to_vec(),&config.limits).unwrap(),changes.clone(),&config).unwrap();
+    let (fast,candidate)=edit::plan_product_owned("in.twb",&hash,source,changes,&config).unwrap();
+    assert_eq!(fast,full);
+    assert_eq!(candidate.text(),after.xml.text);
+    assert_eq!(candidate.sha256(),after.xml.sha256);
+    assert!(crate::validation::local(&after).passed);
+}
+#[test]
+fn product_candidate_errors_match_full_oracle_for_graph_and_preconditions() {
+    let config=cfg(); let hash=fs::sha256(GOOD.as_bytes());
+    for formula in ["[Calculation_Ratio]","[Missing]"] {
+        let changes=ChangeSet{schema_version:1,input_sha256:hash.clone(),operations:vec![
+            Operation::SetCalculation{field_id:FieldId(3),expected_formula:"[Profit] / [Sales]".into(),formula:formula.into()}]};
+        let full=edit::plan_owned("in.twb",&hash,
+            Workbook::parse(GOOD.as_bytes().to_vec(),&config.limits).unwrap(),changes.clone(),&config).err().unwrap();
+        let fast=edit::plan_product_owned("in.twb",&hash,
+            Workbook::parse(GOOD.as_bytes().to_vec(),&config.limits).unwrap(),changes,&config).err().unwrap();
+        assert_eq!((fast.code,fast.message),(full.code,full.message));
+    }
+}

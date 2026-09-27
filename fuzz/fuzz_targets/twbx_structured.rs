@@ -27,9 +27,12 @@ fuzz_target!(|data:&[u8]|{
     let cfg=Config{workspace:dir.path().to_path_buf(),limits:limits.clone(),policy:Policy{allow_unverified_formula_edits:true,..Default::default()},tableau:None,hyper:None};
     let formula=format!("[Profit] / ([Sales] + {})",data.get(2).copied().unwrap_or(1) as u16+1);
     let changes=ChangeSet{schema_version:1,input_sha256:hash.clone(),operations:vec![Operation::SetCalculation{field_id:FieldId(3),expected_formula:"[Profit] / [Sales]".into(),formula:formula.clone()}]};
-    let (plan,after)=edit::plan("input.twbx",&hash,&book,changes,&cfg).expect("supported generated edit must work");
-    patch::verify_preservation(GOOD,&after.xml.text,&plan.patches).unwrap();assert!(validation::local(&after).passed);
-    let output=dir.path().join("out.twbx");pkg.write_candidate(&output,&after.xml,&limits).unwrap();
+    let (plan,candidate)=edit::plan_product_owned("input.twbx",&hash,book,changes,&cfg)
+        .expect("supported generated edit must work");
+    let after=Workbook::parse(candidate.text().as_bytes().to_vec(),&limits).unwrap();
+    assert_eq!(candidate.sha256(),after.xml.sha256);
+    patch::verify_preservation(GOOD,candidate.text(),&plan.patches).unwrap();assert!(validation::local(&after).passed);
+    let output=dir.path().join("out.twbx");pkg.write_planned_candidate(&output,&candidate,&limits).unwrap();
     // Independently read the result and compare every untouched payload to generated data.
     let mut output_zip=ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
     assert_eq!(output_zip.len(),expected.len()+1);
@@ -38,7 +41,7 @@ fuzz_target!(|data:&[u8]|{
         assert_eq!(actual,bytes);
     }
     let mut twb=String::new();output_zip.by_name("workbook.twb").unwrap().read_to_string(&mut twb).unwrap();
-    assert_eq!(twb,after.xml.text);
+    assert_eq!(twb,candidate.text());
     let document=roxmltree::Document::parse(&twb).unwrap();let mut copies=0;
     for column in document.descendants().filter(|n|n.is_element()&&n.attribute("name")==Some("[Calculation_Ratio]")){
         let calculation=column.children().find(|n|n.is_element()&&n.tag_name().name()=="calculation").unwrap();

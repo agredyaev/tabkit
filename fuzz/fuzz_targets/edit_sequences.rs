@@ -29,7 +29,11 @@ fuzz_target!(|data:&[u8]|{
     ];
     ops.rotate_left((at(6)%4) as usize);
     let input_hash=fs::sha256(source.as_bytes());
-    let (plan,after)=edit::plan_owned("in.twb",&input_hash,book,ChangeSet{schema_version:1,input_sha256:input_hash.clone(),operations:ops.clone()},&cfg).unwrap();
+    let (plan,candidate)=edit::plan_product_owned("in.twb",&input_hash,book,
+        ChangeSet{schema_version:1,input_sha256:input_hash.clone(),operations:ops.clone()},&cfg).unwrap();
+    // Re-admission is an independent development oracle, outside the product hot path.
+    let after=Workbook::parse(candidate.text().as_bytes().to_vec(),&cfg.limits).unwrap();
+    assert_eq!(candidate.sha256(),after.xml.sha256);
     // Independently assemble byte replacements; do not reuse the product writer.
     let mut oracle=source.as_bytes().to_vec();let mut patches:Vec<_>=plan.patches.iter().collect();
     patches.sort_by_key(|p|p.span.start);

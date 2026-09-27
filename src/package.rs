@@ -127,8 +127,15 @@ impl Package {
         }
     }
     pub fn write_candidate(&self, output: &Path, candidate: &Xml, limits: &Limits) -> Result<String> {
-        let twb = candidate.text.as_bytes();
         require(candidate.tag(crate::xml::NodeId(0)) == "workbook", "FORMAT", "Candidate must be an admitted workbook")?;
+        self.write_candidate_bytes(output,candidate.text.as_bytes(),&candidate.sha256,limits)
+    }
+    pub fn write_planned_candidate(&self, output:&Path, candidate:&crate::edit::Candidate,
+        limits:&Limits)->Result<String>{
+        self.write_candidate_bytes(output,candidate.text().as_bytes(),candidate.sha256(),limits)
+    }
+    fn write_candidate_bytes(&self, output:&Path, twb:&[u8], twb_sha256:&str,
+        limits:&Limits)->Result<String>{
         require(twb.len() as u64 <= limits.xml_bytes, "LIMIT", "Candidate XML exceeds limit")?;
         let expected_ext = if self.kind == Kind::Twb {
             "twb"
@@ -139,7 +146,7 @@ impl Package {
         require(hash_file(&self.path, limits.file_bytes)? == self.sha256, "STALE_BASE", "Input changed before apply")?;
         let parent = output.parent().ok_or_else(|| Error::new("PATH", "No output parent"))?;
         let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-        if candidate.sha256 == self.twb_sha256 {
+        if twb_sha256 == self.twb_sha256 {
             std::io::copy(&mut File::open(&self.path)?, &mut tmp)?;
         } else if self.kind == Kind::Twb {
             tmp.write_all(twb)?;

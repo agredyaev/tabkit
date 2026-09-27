@@ -74,6 +74,15 @@ pub enum Operation {
         max: Scalar
     },
 }
+/// Candidate bytes produced only by bounded patches over an admitted workbook.
+pub struct Candidate {
+    text: String,
+    sha256: String,
+}
+impl Candidate {
+    pub fn text(&self) -> &str { &self.text }
+    pub fn sha256(&self) -> &str { &self.sha256 }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
@@ -112,6 +121,16 @@ pub fn plan_owned(input: &str, package_sha256: &str, book: Workbook, changes: Ch
     let candidate = emit_candidate(&source, &prepared, cfg)?;
     drop(source);
     complete(input, prepared, candidate, cfg)
+}
+/// Product path: candidate semantics are proven from the admitted source plus bounded typed patches.
+pub fn plan_product_owned(input: &str, package_sha256: &str, book: Workbook,
+    changes: ChangeSet, cfg: &Config) -> Result<(Plan, Candidate)> {
+    let prepared=prepare(package_sha256,&book,changes,cfg)?;
+    let source=book.into_xml().into_text();
+    let (text,sha256)=emit_candidate(&source,&prepared,cfg)?;
+    drop(source);
+    let plan=complete_prechecked(input,prepared,&sha256)?;
+    Ok((plan,Candidate{text,sha256}))
 }
 fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Config) -> Result<Prepared> {
     require(changes.schema_version == 1, "SCHEMA_VERSION", "Unsupported changeset schema")?;
@@ -286,6 +305,20 @@ fn emit_candidate(source: &str, p: &Prepared, cfg: &Config) -> Result<(String,St
     let (candidate, sha256) = patch::apply_admitted(source, &p.patches, cfg.limits.xml_bytes)?;
     patch::verify_preservation(source, &candidate, &p.patches)?;
     Ok((candidate,sha256))
+}
+fn complete_prechecked(input:&str,p:Prepared,candidate_sha256:&str)->Result<Plan>{
+    let Prepared{changes,before,expected,patches,mut warnings,twb_sha256,before_checks:_}=p;
+    let mut delta=Vec::with_capacity(expected.len());
+    for (key,new) in &expected {
+        let old=before.get(key).ok_or_else(||Error::new("INTERNAL","Expected semantic key is absent from admitted source"))?;
+        if old!=new {
+            delta.push(Delta{object:key.clone(),property:"value".into(),before:old.clone(),after:new.clone()});
+        }
+    }
+    warnings.sort(); warnings.dedup();
+    Ok(Plan{schema_version:1,engine_version:env!("CARGO_PKG_VERSION").into(),input:input.into(),
+        changes,twb_sha256,candidate_twb_sha256:candidate_sha256.into(),patches,delta,warnings,
+        tableau_semantics:"not_run".into()})
 }
 fn complete(input: &str, p: Prepared, candidate: (String,String), cfg: &Config) -> Result<(Plan, Workbook)> {
     let Prepared { changes, before, expected, patches, mut warnings, twb_sha256, before_checks } = p;
