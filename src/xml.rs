@@ -13,7 +13,7 @@ use serde::{
     Serialize
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap,HashMap},
     ops::Range
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

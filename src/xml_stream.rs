@@ -16,6 +16,7 @@ struct Builder<'a> {
     uri_ids: BTreeMap<String, u32>, uris: Vec<String>,
     tag_ids: BTreeMap<(u32, &'a str), TextId>,
     attrs: Vec<TempAttribute<'a>>, expanded: Vec<(u32, &'a str)>,
+    decoded_cache: HashMap<&'a str,Span>,
     stack: Vec<Frame<'a>>, pending: Option<Frame<'a>>,
     seen_root: bool, node_count: u32, attribute_count: usize,
 }
@@ -40,7 +41,8 @@ impl<'a> Builder<'a> {
             bindings: BTreeMap::from([("xml", 1)]), undo: Vec::new(),
             uri_ids: BTreeMap::from([(String::new(), 0), (XML_URI.to_owned(), 1)]),
             uris: vec![String::new(), XML_URI.to_owned()], tag_ids: BTreeMap::new(),
-            attrs: Vec::new(), expanded: Vec::new(), stack: Vec::new(), pending: None,
+            attrs: Vec::new(), expanded: Vec::new(), decoded_cache: HashMap::new(),
+            stack: Vec::new(), pending: None,
             seen_root: false, node_count: 1, attribute_count: 0 }
     }
     fn count_node(&mut self) -> Result<()> {
@@ -102,12 +104,16 @@ impl<'a> Builder<'a> {
     }
     fn attribute(&mut self, prefix: &'a str, local: &'a str, value: Range<usize>) -> Result<()> {
         require(self.pending.is_some(), "XML", "Attribute outside a start tag")?;
-        let raw = &self.source[value.clone()];
+        let raw: &'a str = &self.source[value.clone()];
         let decoded = if raw.contains(['&', '\r', '\n', '\t']) {
-            let pool = &mut self.result.normalized;
-            let begin = pool.text.len(); decode_attribute(raw, &mut pool.text)?;
-            let span = Span::new(begin..pool.text.len())?;
-            pool.source_starts.push(value.start as u32); pool.spans.push(span); Some(span)
+            let span=if let Some(span)=self.decoded_cache.get(raw) {*span} else {
+                let pool=&mut self.result.normalized;
+                let begin=pool.text.len(); decode_attribute(raw,&mut pool.text)?;
+                let span=Span::new(begin..pool.text.len())?;
+                self.decoded_cache.insert(raw,span); span
+            };
+            let pool=&mut self.result.normalized;
+            pool.source_starts.push(value.start as u32);pool.spans.push(span);Some(span)
         } else { None };
         self.attribute_count += 1;
         self.attrs.push(TempAttribute { prefix, local });
