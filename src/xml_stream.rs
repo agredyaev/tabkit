@@ -12,9 +12,9 @@ struct Frame<'a> {
 }
 struct Builder<'a> {
     source: &'a str, limits: &'a Limits, result: Xml,
-    bindings: BTreeMap<&'a str, u32>, undo: Vec<(&'a str, Option<u32>)>,
-    uri_ids: BTreeMap<String, u32>, uris: Vec<String>,
-    tag_ids: BTreeMap<(u32, &'a str), TextId>,
+    bindings: HashMap<&'a str, u32>, undo: Vec<(&'a str, Option<u32>)>,
+    uri_ids: HashMap<String, u32>, uris: Vec<String>,
+    tag_ids: HashMap<(u32, &'a str), TextId>,
     attrs: Vec<TempAttribute<'a>>, expanded: Vec<(u32, &'a str)>,
     decoded_cache: HashMap<&'a str,Span>,
     stack: Vec<Frame<'a>>, pending: Option<Frame<'a>>,
@@ -39,9 +39,9 @@ impl<'a> Builder<'a> {
             normalized: Normalized::default(), names: Names::default(), leaf_texts: Vec::new(),
             leaf_text: String::new(), worksheet_owners: Vec::new(), dependency_owners: Vec::new(),
             semantic: SemanticNodes::default(), sha256: String::new() },
-            bindings: BTreeMap::from([("xml", 1)]), undo: Vec::new(),
-            uri_ids: BTreeMap::from([(String::new(), 0), (XML_URI.to_owned(), 1)]),
-            uris: vec![String::new(), XML_URI.to_owned()], tag_ids: BTreeMap::new(),
+            bindings: HashMap::from([("xml", 1)]), undo: Vec::new(),
+            uri_ids: HashMap::from([(String::new(), 0), (XML_URI.to_owned(), 1)]),
+            uris: vec![String::new(), XML_URI.to_owned()], tag_ids: HashMap::new(),
             attrs: Vec::new(), expanded: Vec::new(), decoded_cache: HashMap::new(),
             stack: Vec::new(), pending: None,
             seen_root: false, node_count: 1, attribute_count: 0 }
