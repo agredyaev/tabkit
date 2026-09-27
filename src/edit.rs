@@ -105,24 +105,25 @@ struct Prepared {
     patches: Vec<Patch>,
     warnings: Vec<String>,
     twb_sha256: String,
-    before_checks: crate::validation::LocalValidation,
 }
 /// Borrowed convenience path for callers that intentionally retain the source.
 #[allow(dead_code)]
 pub fn plan(input: &str, package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Config) -> Result<(Plan, Workbook)> {
     let before = book.snapshot()?;
+    let before_checks = crate::validation::local(book);
     let prepared = prepare(package_sha256, book, changes, cfg)?;
     let candidate = emit_candidate(&book.xml.text, &prepared, cfg)?;
-    complete(input, before, prepared, candidate, cfg)
+    complete(input, before, before_checks, prepared, candidate, cfg)
 }
 /// Product path: preserve independently, then release the source before candidate admission.
 pub fn plan_owned(input: &str, package_sha256: &str, book: Workbook, changes: ChangeSet, cfg: &Config) -> Result<(Plan, Workbook)> {
     let before = book.snapshot()?;
+    let before_checks = crate::validation::local(&book);
     let prepared = prepare(package_sha256, &book, changes, cfg)?;
     let source = book.into_xml().into_text();
     let candidate = emit_candidate(&source, &prepared, cfg)?;
     drop(source);
-    complete(input, before, prepared, candidate, cfg)
+    complete(input, before, before_checks, prepared, candidate, cfg)
 }
 /// Product path: candidate semantics are proven from the admitted source plus bounded typed patches.
 pub fn plan_product_owned(input: &str, package_sha256: &str, book: Workbook,
@@ -312,7 +313,7 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
     book.validate_calculation_overrides(&formula_overrides)?;
 
     Ok(Prepared { changes, before_changed, expected, patches, warnings,
-        twb_sha256: book.xml.sha256.clone(), before_checks: crate::validation::local(book) })
+        twb_sha256: book.xml.sha256.clone() })
 }
 fn emit_candidate(source: &str, p: &Prepared, cfg: &Config) -> Result<(String,String)> {
     let (candidate, sha256) = patch::apply_admitted(source, &p.patches, cfg.limits.xml_bytes)?;
@@ -320,7 +321,7 @@ fn emit_candidate(source: &str, p: &Prepared, cfg: &Config) -> Result<(String,St
     Ok((candidate,sha256))
 }
 fn complete_prechecked(input:&str,p:Prepared,candidate_sha256:&str)->Result<Plan>{
-    let Prepared{changes,before_changed,expected,patches,mut warnings,twb_sha256,before_checks:_}=p;
+    let Prepared{changes,before_changed,expected,patches,mut warnings,twb_sha256}=p;
     let mut delta=Vec::with_capacity(expected.len());
     for (key,new) in &expected {
         let old=before_changed.get(key).ok_or_else(||Error::new("INTERNAL","Expected semantic key is absent from admitted source"))?;
@@ -333,8 +334,9 @@ fn complete_prechecked(input:&str,p:Prepared,candidate_sha256:&str)->Result<Plan
         changes,twb_sha256,candidate_twb_sha256:candidate_sha256.into(),patches,delta,warnings,
         tableau_semantics:"not_run".into()})
 }
-fn complete(input: &str, before: BTreeMap<String,Value>, p: Prepared, candidate: (String,String), cfg: &Config) -> Result<(Plan, Workbook)> {
-    let Prepared { changes, before_changed:_, expected, patches, mut warnings, twb_sha256, before_checks } = p;
+fn complete(input: &str, before: BTreeMap<String,Value>, before_checks: crate::validation::LocalValidation,
+    p: Prepared, candidate: (String,String), cfg: &Config) -> Result<(Plan, Workbook)> {
+    let Prepared { changes, before_changed:_, expected, patches, mut warnings, twb_sha256 } = p;
     let (candidate,candidate_sha256)=candidate;
     let after = Workbook::parse_with_sha256(candidate.into_bytes(), &cfg.limits, candidate_sha256)?;
     after.require_acyclic()?;
