@@ -7,7 +7,7 @@ use crate::{
     fs::{digest_hex, sha256},
     xml::Span
 };
-use sha2::{Digest, Sha256};
+use ring::digest::{Context, SHA256};
 use serde::{
     Deserialize,
     Serialize
@@ -53,20 +53,20 @@ fn admitted_layout<'a>(input:&str,patches:&'a [Patch],max:u64)->Result<(Vec<&'a 
 /// Hash the deterministic virtual candidate without materializing its full byte buffer.
 pub fn hash_admitted(input:&str,patches:&[Patch],max:u64)->Result<String>{
     let (sorted,_)=admitted_layout(input,patches,max)?;
-    let mut digest=Sha256::new(); let mut cursor=0usize;
+    let mut digest=Context::new(&SHA256); let mut cursor=0usize;
     for p in sorted {
         let r=p.span.range(); digest.update(input[cursor..r.start].as_bytes());
         digest.update(p.replacement.as_bytes()); cursor=r.end;
     }
     digest.update(input[cursor..].as_bytes());
-    Ok(digest_hex(digest.finalize().into()))
+    Ok({ let d=digest.finish(); let mut b=[0u8;32]; b.copy_from_slice(d.as_ref()); digest_hex(b) })
 }
 /// Apply bytes already owned by an admitted immutable document. Hash the candidate while emitting it.
 pub fn apply_admitted(input: &str, patches: &[Patch], max: u64) -> Result<(String,String)> {
     let (sorted,length)=admitted_layout(input,patches,max)?;
     let mut out = String::new();
     out.try_reserve_exact(length).map_err(|_|Error::new("LIMIT","Cannot reserve candidate buffer"))?;
-    let mut digest = Sha256::new();
+    let mut digest = Context::new(&SHA256);
     let mut cursor = 0;
     for p in sorted {
         let r=p.span.range();
@@ -77,7 +77,7 @@ pub fn apply_admitted(input: &str, patches: &[Patch], max: u64) -> Result<(Strin
     }
     let tail=&input[cursor..];
     out.push_str(tail); digest.update(tail.as_bytes());
-    Ok((out,digest_hex(digest.finalize().into())))
+    Ok((out,{ let d=digest.finish(); let mut b=[0u8;32]; b.copy_from_slice(d.as_ref()); digest_hex(b) }))
 }
 /// Independent preservation walk over input/output offsets, not a second serializer.
 pub fn verify_preservation(input: &str, output: &str, patches: &[Patch]) -> Result<()> {

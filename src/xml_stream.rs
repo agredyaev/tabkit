@@ -19,7 +19,7 @@ struct Builder<'a> {
     bindings: HashMap<&'a str, u32>, default_ns: u32, undo: Vec<NamespaceUndo<'a>>,
     uri_ids: HashMap<String, u32>, uris: Vec<String>,
     tag_ids: HashMap<(u32, &'a str), TextId>, last_tag: Option<(u32, &'a str, TextId)>,
-    attrs: Vec<TempAttribute<'a>>, expanded: Vec<(u32, &'a str)>,
+    attrs: Vec<TempAttribute<'a>>, expanded: Vec<(u32, &'a str)>, common_attrs:u32,
     decoded_cache: HashMap<&'a str,Span>,
     stack: Vec<Frame<'a>>, pending: Option<Frame<'a>>,
     seen_root: bool, node_count: u32, attribute_count: usize,
@@ -64,7 +64,7 @@ impl<'a> Builder<'a> {
             bindings: HashMap::from([("xml", 1)]), default_ns: 0, undo: Vec::new(),
             uri_ids: HashMap::from([(String::new(), 0), (XML_URI.to_owned(), 1)]),
             uris: vec![String::new(), XML_URI.to_owned()], tag_ids: HashMap::new(), last_tag: None,
-            attrs: Vec::new(), expanded: Vec::new(), decoded_cache: HashMap::new(),
+            attrs: Vec::new(), expanded: Vec::new(), common_attrs:0, decoded_cache: HashMap::new(),
             stack: Vec::new(), pending: None,
             seen_root: false, node_count: 1, attribute_count: 0 }
     }
@@ -122,11 +122,21 @@ impl<'a> Builder<'a> {
             attributes:IndexRange::empty(self.attribute_count), leaf_text:NONE_ID,
             worksheet_owner:Node::link(sheet), dependency_owner:Node::link(dependency),
             raw_attributes:Span::new(span.end..span.end)?, normalized:IndexRange::empty(normalized) });
-        self.attrs.clear(); self.expanded.clear();
+        self.attrs.clear(); self.expanded.clear(); self.common_attrs=0;
         self.pending = Some(Frame { id, prefix, local, ns_mark: self.undo.len(),
             text_begin: self.result.leaf_text.len(), leaf: true, last_text: false,
             last_element: None, sheet, dependency, has_column_attr: false });
         Ok(())
+    }
+    #[inline]
+    fn common_attr_bit(local:&str)->Option<u32> {
+        Some(match local {
+            "name"=>1<<0, "type"=>1<<1, "caption"=>1<<2, "datatype"=>1<<3,
+            "role"=>1<<4, "class"=>1<<5, "formula"=>1<<6, "datasource"=>1<<7,
+            "column"=>1<<8, "derivation"=>1<<9, "key"=>1<<10, "source-build"=>1<<11,
+            "id"=>1<<12, "x"=>1<<13, "y"=>1<<14, "w"=>1<<15, "h"=>1<<16,
+            _=>return None,
+        })
     }
     fn attribute(&mut self, prefix: &'a str, local: &'a str, value: Range<usize>) -> Result<()> {
         let raw: &'a str = &self.source[value.clone()];
@@ -170,9 +180,14 @@ impl<'a> Builder<'a> {
                 self.undo.push(NamespaceUndo::Prefix(p,old));
             }
         } else if prefix.is_empty() {
-            let expanded=(0,local);
-            require(!self.expanded.contains(&expanded),"XML","Duplicate expanded attribute name")?;
-            self.expanded.push(expanded);
+            if let Some(bit)=Self::common_attr_bit(local) {
+                require(self.common_attrs&bit==0,"XML","Duplicate expanded attribute name")?;
+                self.common_attrs|=bit;
+            } else {
+                let expanded=(0,local);
+                require(!self.expanded.contains(&expanded),"XML","Duplicate expanded attribute name")?;
+                self.expanded.push(expanded);
+            }
             if local=="column" {
                 if let Some(f)=self.pending.as_mut() { f.has_column_attr=true; }
             }

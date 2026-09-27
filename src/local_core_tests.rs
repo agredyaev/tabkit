@@ -360,3 +360,49 @@ proptest::proptest! {
         proptest::prop_assert_eq!(std::fs::read(dir.path().join("in.twb")).unwrap(),source.as_bytes());
     }
 }
+
+#[test]
+fn reordered_dependency_columns_fall_back_to_exact_field_resolution() {
+    let column=|name:&str,formula:Option<&str>|match formula {
+        Some(f)=>format!("<column name='[{name}]' datatype='real'><calculation class='tableau' formula='{f}'/></column>"),
+        None=>format!("<column name='[{name}]' datatype='real'/>")
+    };
+    let base=column("Base",None);
+    let extra=column("Extra",None);
+    let mid=column("Mid",Some("[Base]"));
+    let end=column("Outer",Some("[Mid] * 2"));
+    let primary=format!("{base}{extra}{mid}{end}");
+    let first=format!("{end}{base}{mid}{extra}");
+    let second=format!("{mid}{extra}{end}{base}");
+    let source=format!("<workbook source-build='2025.1.0'><datasources><datasource name='d'>{primary}</datasource></datasources><worksheets><worksheet name='First'><datasource-dependencies datasource='d'>{first}</datasource-dependencies></worksheet><worksheet name='Second'><datasource-dependencies datasource='d'>{second}</datasource-dependencies></worksheet></worksheets></workbook>");
+    let book=checked_book(&source);
+    assert_eq!(book.field_report(2)["definition_copies"],3);
+    assert_eq!(book.field_report(3)["definition_copies"],3);
+    let (dir,app)=setup(&source);
+    let p=plan(&app,&source,vec![calc(2,"[Base]","[Extra]")]).unwrap();
+    assert_eq!(p["patch_count"],3);
+    apply_candidate(&app,&p);
+    let out=std::fs::read_to_string(dir.path().join("out.twb")).unwrap();
+    let doc=roxmltree::Document::parse(&out).unwrap();
+    let copies:Vec<_>=doc.descendants()
+        .filter(|n|n.is_element()&&n.attribute("name")==Some("[Mid]")).collect();
+    assert_eq!(copies.len(),3);
+    for n in copies {
+        assert_eq!(n.children().find(|c|c.has_tag_name("calculation")).unwrap()
+            .attribute("formula"),Some("[Extra]"));
+    }
+}
+
+#[test]
+fn copy_reserve_cap_never_limits_dependency_copy_count() {
+    let field="<column name='[X]' datatype='real'/>";
+    let mut sheets=String::new();
+    for i in 0..300 {
+        sheets.push_str(&format!("<worksheet name='S{i}'><datasource-dependencies datasource='d'>{field}</datasource-dependencies></worksheet>"));
+    }
+    let source=format!("<workbook source-build='2025.1.0'><datasources><datasource name='d'>{field}</datasource></datasources><worksheets>{sheets}</worksheets></workbook>");
+    let book=checked_book(&source);
+    assert_eq!(book.field_report(0)["definition_copies"],301);
+    assert_eq!(book.dependency_scopes.len(),300);
+    assert_eq!(book.dependency_fields.len(),300);
+}

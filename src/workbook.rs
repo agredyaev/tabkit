@@ -22,10 +22,10 @@ use serde_json::{
     Value,
     json
 };
+use ahash::AHashMap as HashMap;
 use std::collections::{
     BTreeMap,
     BTreeSet,
-    HashMap,
     VecDeque
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
@@ -141,11 +141,13 @@ impl Workbook {
         let mut fields = Vec::new();
         let mut ds_ids = BTreeMap::new();
         let mut field_ids: Vec<HashMap<String, FieldId>> = Vec::new();
+        let mut defined_fields:Vec<Vec<FieldId>>=Vec::new();
         for ds in xml.named_children(ds_container, "datasource") {
             let name = xml.required(ds, "name")?.to_string();
             require(!ds_ids.contains_key(&name), "AMBIGUOUS_TARGET", "Duplicate datasource internal name")?;
             let id = DatasourceId(datasources.len() as u32);
             field_ids.push(HashMap::new());
+            defined_fields.push(Vec::new());
             ds_ids.insert(name.clone(), id);
             datasources.push(Datasource {
                 id,
@@ -158,6 +160,7 @@ impl Workbook {
                 require(!field_ids[id.0 as usize].contains_key(name.as_str()), "AMBIGUOUS_TARGET", "Duplicate datasource field definition")?;
                 let fid = FieldId(fields.len() as u32);
                 field_ids[id.0 as usize].insert(name.clone(), fid);
+                defined_fields[id.0 as usize].push(fid);
                 let calc: Vec<_> = xml.named_children(n, "calculation").collect();
                 require(calc.len() <= 1, "UNSUPPORTED_SHAPE", "Multiple calculations in a column")?;
                 let formula = calc.first().and_then(|c| xml.value(*c, "formula")).map(str::to_owned);
@@ -204,6 +207,21 @@ impl Workbook {
                 });
             }
         }
+        // Dependency copies are commonly repeated once per worksheet. Reserve from the
+        // admitted scope count per datasource to avoid geometric growth in every Field.
+        // The cap bounds speculative slack for sparse or unusual documents.
+        let mut scope_counts=vec![0usize;datasources.len()];
+        for &scope in &xml.semantic.datasource_dependencies {
+            if let Some(id)=xml.value(scope,"datasource").and_then(|n|ds_ids.get(n)).copied() {
+                scope_counts[id.0 as usize]=scope_counts[id.0 as usize].saturating_add(1);
+            }
+        }
+        for field in &mut fields {
+            if field.node.is_some() {
+                let additional=scope_counts[field.datasource.0 as usize].min(256);
+                field.copies.reserve_exact(additional);
+            }
+        }
         // Known copies remain attached to a global field. Local/unknown definitions
         // are exposed explicitly instead of disappearing from the coverage report.
         let mut dependency_scopes = Vec::new();
@@ -214,9 +232,23 @@ impl Workbook {
             let ds = ds_name.and_then(|n| ds_ids.get(n)).copied();
             let worksheet = xml.ancestor(scope, "worksheet");
             let begin = dependency_fields.len();
+            let mut ordered_index=0usize;
+            let mut ordered=true;
             for n in xml.named_children(scope, "column") {
                 let name = xml.value(n, "name");
-                let fid = ds.and_then(|d| name.and_then(|name| field_ids[d.0 as usize].get(name))).copied();
+                let fid = ds.and_then(|d| {
+                    let name=name?;
+                    if ordered {
+                        if let Some(&candidate)=defined_fields[d.0 as usize].get(ordered_index) {
+                            if fields[candidate.0 as usize].name==name {
+                                ordered_index+=1;
+                                return Some(candidate);
+                            }
+                        }
+                        ordered=false;
+                    }
+                    field_ids[d.0 as usize].get(name).copied()
+                });
                 if let Some(fid) = fid {
                     fields[fid.0 as usize].copies.push(n);
                     dependency_fields.push(fid);

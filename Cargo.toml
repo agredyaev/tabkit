@@ -14,9 +14,11 @@ hyper = ["dep:cc", "dep:sqlparser"]
 
 [dependencies]
 base64 = "0.22"
+ahash = "0.8"
 clap = { version = "4.5", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+ring = "0.17"
 rmcp = { version = "=3.4.1", default-features = false, features = ["server", "transport-io"] }
 xmlparser = "=0.13.6"
 memchr = "2"

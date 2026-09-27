@@ -12,10 +12,8 @@ use serde::{
     Deserialize,
     Serialize
 };
-use std::{
-    collections::HashMap,
-    ops::Range
-};
+use std::ops::Range;
+use ahash::AHashMap as HashMap;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Span {
     pub start: u32,

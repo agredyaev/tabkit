@@ -179,3 +179,20 @@ fn fast_path_is_conservative_and_matches_tokenizer_projection() {
             "must delegate lexical edge case: {fallback_source}");
     }
 }
+
+#[test]
+fn common_attribute_duplicate_fast_path_preserves_expanded_name_rules() {
+    let limits=Limits::default();
+    for source in [
+        "<workbook name='a' name='b'/>",
+        "<workbook column='a' column='b'/>",
+        "<workbook datatype='a' datatype='b'/>",
+    ] {
+        assert_eq!(Xml::parse(source.as_bytes().to_vec(),&limits).err().unwrap().code,"XML");
+    }
+    let distinct="<workbook xmlns:u='urn:u' name='plain' u:name='qualified' namex='other'/>";
+    let xml=Xml::parse(distinct.as_bytes().to_vec(),&limits).unwrap();
+    assert_eq!(xml.value(NodeId(0),"name"),Some("plain"));
+    assert_eq!(xml.value(NodeId(0),"u:name"),Some("qualified"));
+    assert_eq!(xml.value(NodeId(0),"namex"),Some("other"));
+}
