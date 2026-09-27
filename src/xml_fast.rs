@@ -44,6 +44,24 @@ fn name_rest(b:u8)->bool { NAME_CLASS[b as usize]&2!=0 }
 
 fn qname<'a>(source:&'a str, mut p:usize)->FastResult<(&'a str,&'a str,usize)> {
     let bytes=source.as_bytes(); let start=p;
+    // Tableau's dominant tags/attributes are a tiny stable vocabulary. Accept only an
+    // exact ASCII name boundary here; every other spelling uses the full QName validator.
+    let common:&[u8]=match bytes.get(p).copied() {
+        Some(b'n') if bytes.get(p..p+4)==Some(b"name") => b"name",
+        Some(b't') if bytes.get(p..p+4)==Some(b"type") => b"type",
+        Some(b'd') if bytes.get(p..p+8)==Some(b"datatype") => b"datatype",
+        Some(b'r') if bytes.get(p..p+4)==Some(b"role") => b"role",
+        Some(b'c') if bytes.get(p..p+7)==Some(b"caption") => b"caption",
+        Some(b'c') if bytes.get(p..p+6)==Some(b"column") => b"column",
+        Some(b'c') if bytes.get(p..p+11)==Some(b"calculation") => b"calculation",
+        _ => b"",
+    };
+    if !common.is_empty() {
+        let end=p+common.len();
+        if bytes.get(end).is_none_or(|b|!name_rest(*b)&&*b!=b':') {
+            return Ok(("",&source[p..end],end));
+        }
+    }
     if p>=bytes.len() || !name_start(bytes[p]) { return Err(FastError::Unsupported); }
     p+=1;
     while p<bytes.len() && name_rest(bytes[p]) { p+=1; }

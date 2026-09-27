@@ -196,3 +196,18 @@ fn common_attribute_duplicate_fast_path_preserves_expanded_name_rules() {
     assert_eq!(xml.value(NodeId(0),"u:name"),Some("qualified"));
     assert_eq!(xml.value(NodeId(0),"namex"),Some("other"));
 }
+
+#[test]
+fn common_qname_fast_path_requires_exact_boundaries() {
+    let source="<workbook><column/><columnx/><calculation/><calculationx/><n name='a' namex='b' type='c' typex='d' caption='e' captionx='f' datatype='g' datatypex='h' role='i' rolex='j'/></workbook>";
+    let fast=super::stream::fast_for_test(source.as_bytes().to_vec(),&Limits::default())
+        .unwrap().expect("ASCII names should stay on the fast path");
+    let fallback=super::stream::fallback_for_test(source.as_bytes().to_vec(),&Limits::default()).unwrap();
+    assert_eq!(fast.nodes.len(),fallback.nodes.len());
+    for i in 0..fast.nodes.len() {
+        let id=NodeId(i as u32);
+        assert_eq!(fast.tag(id),fallback.tag(id));
+        assert_eq!(fast.attributes(id).map(|a|(a.name.to_owned(),a.value.to_owned())).collect::<Vec<_>>(),
+            fallback.attributes(id).map(|a|(a.name.to_owned(),a.value.to_owned())).collect::<Vec<_>>());
+    }
+}
