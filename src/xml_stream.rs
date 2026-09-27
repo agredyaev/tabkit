@@ -12,7 +12,7 @@ enum NamespaceUndo<'a> {
 struct Frame<'a> {
     id: NodeId, prefix: &'a str, local: &'a str, ns_mark: usize,
     text_begin: usize, leaf: bool, last_text: bool, last_element: Option<NodeId>,
-    sheet: Option<NodeId>, dependency: Option<NodeId>,
+    sheet: Option<NodeId>, dependency: Option<NodeId>, has_column_attr: bool,
 }
 struct Builder<'a> {
     source: &'a str, limits: &'a Limits, result: Xml,
@@ -122,10 +122,10 @@ impl<'a> Builder<'a> {
             attributes:IndexRange::empty(self.attribute_count), leaf_text:NONE_ID,
             worksheet_owner:Node::link(sheet), dependency_owner:Node::link(dependency),
             raw_attributes:Span::new(span.end..span.end)?, normalized:IndexRange::empty(normalized) });
-        self.attrs.clear();
+        self.attrs.clear(); self.expanded.clear();
         self.pending = Some(Frame { id, prefix, local, ns_mark: self.undo.len(),
             text_begin: self.result.leaf_text.len(), leaf: true, last_text: false,
-            last_element: None, sheet, dependency });
+            last_element: None, sheet, dependency, has_column_attr: false });
         Ok(())
     }
     fn attribute(&mut self, prefix: &'a str, local: &'a str, value: Range<usize>) -> Result<()> {
@@ -146,8 +146,12 @@ impl<'a> Builder<'a> {
             pool.source_starts.push(value.start as u32);pool.spans.push(span);Some(span)
         } else { None };
         self.attribute_count += 1;
-        self.attrs.push(TempAttribute { prefix, local });
-        if prefix == "xmlns" || (prefix.is_empty() && local == "xmlns") {
+        let declaration=prefix=="xmlns" || (prefix.is_empty()&&local=="xmlns");
+        if declaration {
+            let declaration_name=if prefix.is_empty() {"xmlns"} else {local};
+            let expanded=(u32::MAX,declaration_name);
+            require(!self.expanded.contains(&expanded),"XML","Duplicate expanded attribute name")?;
+            self.expanded.push(expanded);
             let uri = match decoded { Some(s) => &self.result.normalized.text[s.range()], None => raw };
             let p = if prefix.is_empty() { "" } else { local };
             require(p != "xmlns" && uri != XMLNS_URI, "XML", "Reserved xmlns namespace")?;
@@ -165,6 +169,16 @@ impl<'a> Builder<'a> {
                 let old=self.bindings.insert(p,ns);
                 self.undo.push(NamespaceUndo::Prefix(p,old));
             }
+        } else if prefix.is_empty() {
+            let expanded=(0,local);
+            require(!self.expanded.contains(&expanded),"XML","Duplicate expanded attribute name")?;
+            self.expanded.push(expanded);
+            if local=="column" {
+                if let Some(f)=self.pending.as_mut() { f.has_column_attr=true; }
+            }
+        } else {
+            // Prefix bindings apply to the whole start tag, including declarations that follow.
+            self.attrs.push(TempAttribute{prefix,local});
         }
         Ok(())
     }
@@ -199,12 +213,11 @@ impl<'a> Builder<'a> {
             self.finish(f, span.end)?; return Ok(());
         }
         let mut f = self.pending.take().ok_or_else(|| Error::new("XML", "Missing start tag"))?;
-        self.expanded.clear();
+        // Unprefixed and namespace-declaration duplicates were checked as attributes arrived.
+        // Only prefixed attributes need deferred expanded-name resolution after all declarations.
         for a in &self.attrs {
-            let declaration = a.prefix == "xmlns" || (a.prefix.is_empty() && a.local == "xmlns");
-            let ns = if declaration { u32::MAX } else { self.namespace(a.prefix, false)? };
-            let expanded=(ns,a.local);
-            require(!self.expanded.contains(&expanded), "XML", "Duplicate expanded attribute name")?;
+            let expanded=(self.namespace(a.prefix,false)?,a.local);
+            require(!self.expanded.contains(&expanded),"XML","Duplicate expanded attribute name")?;
             self.expanded.push(expanded);
         }
         let ns = self.namespace(f.prefix, true)?;
@@ -231,7 +244,7 @@ impl<'a> Builder<'a> {
                 "metadata-record"=>semantic.metadata_records.push(f.id),
                 _=>{}
             }
-            if f.local!="column-instance" && self.attrs.iter().any(|a|a.prefix.is_empty()&&a.local=="column") {
+            if f.local!="column-instance" && f.has_column_attr {
                 semantic.column_bindings.push(f.id);
             }
         }
