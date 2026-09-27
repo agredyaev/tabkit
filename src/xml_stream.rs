@@ -5,6 +5,10 @@ const XML_URI: &str = "http://www.w3.org/XML/1998/namespace";
 const XMLNS_URI: &str = "http://www.w3.org/2000/xmlns/";
 #[derive(Clone, Copy)]
 struct TempAttribute<'a> { prefix: &'a str, local: &'a str }
+enum NamespaceUndo<'a> {
+    Prefix(&'a str, Option<u32>),
+    Default(u32),
+}
 struct Frame<'a> {
     id: NodeId, prefix: &'a str, local: &'a str, ns_mark: usize,
     text_begin: usize, leaf: bool, last_text: bool, last_element: Option<NodeId>,
@@ -12,9 +16,9 @@ struct Frame<'a> {
 }
 struct Builder<'a> {
     source: &'a str, limits: &'a Limits, result: Xml,
-    bindings: HashMap<&'a str, u32>, undo: Vec<(&'a str, Option<u32>)>,
+    bindings: HashMap<&'a str, u32>, default_ns: u32, undo: Vec<NamespaceUndo<'a>>,
     uri_ids: HashMap<String, u32>, uris: Vec<String>,
-    tag_ids: HashMap<(u32, &'a str), TextId>,
+    tag_ids: HashMap<(u32, &'a str), TextId>, last_tag: Option<(u32, &'a str, TextId)>,
     attrs: Vec<TempAttribute<'a>>, expanded: Vec<(u32, &'a str)>,
     decoded_cache: HashMap<&'a str,Span>,
     stack: Vec<Frame<'a>>, pending: Option<Frame<'a>>,
@@ -39,9 +43,9 @@ impl<'a> Builder<'a> {
             normalized: Normalized::default(), names: Names::default(), leaf_texts: Vec::new(),
             leaf_text: String::new(), worksheet_owners: Vec::new(), dependency_owners: Vec::new(),
             semantic: SemanticNodes::default(), sha256: String::new() },
-            bindings: HashMap::from([("xml", 1)]), undo: Vec::new(),
+            bindings: HashMap::from([("xml", 1)]), default_ns: 0, undo: Vec::new(),
             uri_ids: HashMap::from([(String::new(), 0), (XML_URI.to_owned(), 1)]),
-            uris: vec![String::new(), XML_URI.to_owned()], tag_ids: HashMap::new(),
+            uris: vec![String::new(), XML_URI.to_owned()], tag_ids: HashMap::new(), last_tag: None,
             attrs: Vec::new(), expanded: Vec::new(), decoded_cache: HashMap::new(),
             stack: Vec::new(), pending: None,
             seen_root: false, node_count: 1, attribute_count: 0 }
@@ -129,20 +133,38 @@ impl<'a> Builder<'a> {
                 None => { let id = self.uris.len() as u32;
                     self.uris.push(uri.to_owned()); self.uri_ids.insert(uri.to_owned(), id); id }
             };
-            let old = self.bindings.insert(p, ns); self.undo.push((p, old));
+            if p.is_empty() {
+                self.undo.push(NamespaceUndo::Default(self.default_ns));
+                self.default_ns = ns;
+            } else {
+                let old=self.bindings.insert(p,ns);
+                self.undo.push(NamespaceUndo::Prefix(p,old));
+            }
         }
         Ok(())
     }
     fn namespace(&self, prefix: &str, default: bool) -> Result<u32> {
-        if prefix.is_empty() { return Ok(if default { self.bindings.get("").copied().unwrap_or(0) } else { 0 }); }
+        if prefix.is_empty() { return Ok(if default { self.default_ns } else { 0 }); }
         self.bindings.get(prefix).copied().ok_or_else(|| Error::new("XML", format!("Undeclared namespace prefix {prefix}")))
     }
     fn rollback_namespaces(&mut self, mark: usize) {
         while self.undo.len() > mark {
-            if let Some((prefix, old)) = self.undo.pop() {
-                match old { Some(ns) => { self.bindings.insert(prefix, ns); }, None => { self.bindings.remove(prefix); } }
+            match self.undo.pop() {
+                Some(NamespaceUndo::Default(old)) => self.default_ns=old,
+                Some(NamespaceUndo::Prefix(prefix,old)) => match old {
+                    Some(ns)=>{self.bindings.insert(prefix,ns);},
+                    None=>{self.bindings.remove(prefix);},
+                },
+                None=>break,
             }
         }
+    }
+    fn intern_tag(&mut self, key:(u32,&'a str))->TextId {
+        if let Some(id)=self.tag_ids.get(&key) { return *id; }
+        let (ns,local)=key;
+        let id=TextId(self.result.names.strings.len() as u32);
+        self.result.names.strings.push(if ns==0 {local.to_owned()} else {format!("{{{}}}{}",self.uris[ns as usize],local)});
+        self.tag_ids.insert(key,id); id
     }
     fn end(&mut self, end: ElementEnd<'a>, span: Range<usize>) -> Result<()> {
         if let ElementEnd::Close(prefix, local) = end {
@@ -162,12 +184,15 @@ impl<'a> Builder<'a> {
         }
         let ns = self.namespace(f.prefix, true)?;
         require(f.id != NodeId(0) || ns == 0, "UNSUPPORTED_SHAPE", "Namespaced workbook roots are unsupported")?;
-        let key = (ns, f.local);
-        let name = match self.tag_ids.get(&key) {
-            Some(id) => *id,
-            None => { let id = TextId(self.result.names.strings.len() as u32);
-                self.result.names.strings.push(if ns == 0 { f.local.to_owned() } else { format!("{{{}}}{}", self.uris[ns as usize], f.local) });
-                self.tag_ids.insert(key, id); id }
+        let key=(ns,f.local);
+        let name=if let Some((cached_ns,cached_local,id))=self.last_tag {
+            if cached_ns==ns && cached_local==f.local { id } else {
+                let id=self.intern_tag(key);
+                self.last_tag=Some((ns,f.local,id)); id
+            }
+        } else {
+            let id=self.intern_tag(key);
+            self.last_tag=Some((ns,f.local,id)); id
         };
         if ns==0 {
             let semantic=&mut self.result.semantic;
