@@ -88,7 +88,32 @@ pub struct Plan {
     pub warnings: Vec<String>,
     pub tableau_semantics: String,
 }
+/// Compact comparison authority retained after the original index is released.
+struct Prepared {
+    changes: ChangeSet,
+    before: BTreeMap<String, Value>,
+    expected: BTreeMap<String, Value>,
+    patches: Vec<Patch>,
+    warnings: Vec<String>,
+    twb_sha256: String,
+    before_checks: crate::validation::LocalValidation,
+}
+/// Borrowed convenience path for callers that intentionally retain the source.
+#[allow(dead_code)]
 pub fn plan(input: &str, package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Config) -> Result<(Plan, Workbook)> {
+    let prepared = prepare(package_sha256, book, changes, cfg)?;
+    let candidate = emit_candidate(&book.xml.text, &prepared, cfg)?;
+    complete(input, prepared, candidate, cfg)
+}
+/// Product path: preserve independently, then release the source before candidate admission.
+pub fn plan_owned(input: &str, package_sha256: &str, book: Workbook, changes: ChangeSet, cfg: &Config) -> Result<(Plan, Workbook)> {
+    let prepared = prepare(package_sha256, &book, changes, cfg)?;
+    let source = book.into_xml().into_text();
+    let candidate = emit_candidate(&source, &prepared, cfg)?;
+    drop(source);
+    complete(input, prepared, candidate, cfg)
+}
+fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Config) -> Result<Prepared> {
     require(changes.schema_version == 1, "SCHEMA_VERSION", "Unsupported changeset schema")?;
     require(changes.input_sha256 == package_sha256, "STALE_BASE", "Input artifact hash differs from the inspected snapshot")?;
     require(!changes.operations.is_empty() && changes.operations.len() <= cfg.limits.max_operations, "LIMIT", "Changeset operation count is invalid")?;
@@ -245,9 +270,17 @@ pub fn plan(input: &str, package_sha256: &str, book: &Workbook, changes: ChangeS
         }
     }
     patches.sort_by_key(|p| (p.span.start,p.span.end));
-    let twb_sha256 = book.xml.sha256.clone();
-    let candidate = patch::apply(&book.xml.text, &twb_sha256, &patches, cfg.limits.xml_bytes)?;
-    patch::verify_preservation(&book.xml.text, &candidate, &patches)?;
+
+    Ok(Prepared { changes, before, expected, patches, warnings,
+        twb_sha256: book.xml.sha256.clone(), before_checks: crate::validation::local(book) })
+}
+fn emit_candidate(source: &str, p: &Prepared, cfg: &Config) -> Result<String> {
+    let candidate = patch::apply(source, &p.twb_sha256, &p.patches, cfg.limits.xml_bytes)?;
+    patch::verify_preservation(source, &candidate, &p.patches)?;
+    Ok(candidate)
+}
+fn complete(input: &str, p: Prepared, candidate: String, cfg: &Config) -> Result<(Plan, Workbook)> {
+    let Prepared { changes, before, expected, patches, mut warnings, twb_sha256, before_checks } = p;
     let after = Workbook::parse(candidate.into_bytes(), &cfg.limits)?;
     after.require_acyclic()?;
     let actual = after.snapshot()?;
@@ -260,7 +293,7 @@ pub fn plan(input: &str, package_sha256: &str, book: &Workbook, changes: ChangeS
         _=>None,
     }).collect();
     after.require_calculation_dependencies(&changed_calculations)?;
-    reject_new_diagnostics(book, &after)?;
+    reject_new_diagnostics(&before_checks, &after)?;
     // Check that any mirrored definitions also reflect the candidate primary state.
     verify_changed_copies(&after, &changes.operations)?;
     let delta = diff(&before, &actual);
@@ -385,9 +418,8 @@ fn categorical_fragment(book:&Workbook,group:NodeId,level:&str,values:&[String])
         Ok(out)
     }
 }
-fn reject_new_diagnostics(before:&Workbook,after:&Workbook)->Result<()> {
+fn reject_new_diagnostics(before_checks:&crate::validation::LocalValidation,after:&Workbook)->Result<()> {
     let mut counts=BTreeMap::new();
-    let before_checks = crate::validation::local(before);
     let after_checks = crate::validation::local(after);
     for d in &before_checks.diagnostics {
         *counts.entry(d).or_insert(0usize)+=1;

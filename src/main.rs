@@ -180,3 +180,6 @@ mod local_core_tests;
 
 #[cfg(test)]
 mod xml_index_tests;
+
+#[cfg(test)]
+mod ownership_tests;

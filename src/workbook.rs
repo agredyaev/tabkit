@@ -25,6 +25,7 @@ use serde_json::{
 use std::collections::{
     BTreeMap,
     BTreeSet,
+    HashMap,
     VecDeque
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
@@ -105,14 +106,15 @@ pub struct FieldUse {
 pub struct Workbook {
     datasource_lookup:BTreeMap<String,
     DatasourceId>,
-    field_lookup:BTreeMap<(DatasourceId,String),
-    FieldId>,
+    field_lookup:Vec<HashMap<String, FieldId>>,
     pub xml: Xml,
     pub source_build: Option<String>,
     pub datasources: Vec<Datasource>,
     pub fields: Vec<Field>,
     pub filters: Vec<Filter>,
     pub edges: Vec<Edge>,
+    referrer_order: Vec<usize>,
+    filter_order: Vec<usize>,
     pub ref_offsets: Vec<u32>,
     pub dependency_scopes: Vec<DependencyScope>,
     pub dependency_fields: Vec<FieldId>,
@@ -123,6 +125,7 @@ pub struct Workbook {
     pub dashboards: Vec<String>,
 }
 impl Workbook {
+    pub fn into_xml(self) -> Xml { self.xml }
     pub fn parse(bytes: Vec<u8>, limits: &Limits) -> Result<Self> {
         Self::from_xml(Xml::parse(bytes, limits)?)
     }
@@ -134,11 +137,12 @@ impl Workbook {
         let mut datasources = Vec::new();
         let mut fields = Vec::new();
         let mut ds_ids = BTreeMap::new();
-        let mut field_ids = BTreeMap::new();
+        let mut field_ids: Vec<HashMap<String, FieldId>> = Vec::new();
         for ds in xml.named_children(ds_container, "datasource") {
             let name = xml.required(ds, "name")?.to_string();
             require(!ds_ids.contains_key(&name), "AMBIGUOUS_TARGET", "Duplicate datasource internal name")?;
             let id = DatasourceId(datasources.len() as u32);
+            field_ids.push(HashMap::new());
             ds_ids.insert(name.clone(), id);
             datasources.push(Datasource {
                 id,
@@ -147,10 +151,10 @@ impl Workbook {
             });
             for n in xml.named_children(ds, "column") {
                 let name = xml.required(n, "name")?.to_string();
-                let key = (id, name.clone());
-                require(!field_ids.contains_key(&key), "AMBIGUOUS_TARGET", "Duplicate datasource field definition")?;
+
+                require(!field_ids[id.0 as usize].contains_key(name.as_str()), "AMBIGUOUS_TARGET", "Duplicate datasource field definition")?;
                 let fid = FieldId(fields.len() as u32);
-                field_ids.insert(key, fid);
+                field_ids[id.0 as usize].insert(name.clone(), fid);
                 let calc: Vec<_> = xml.named_children(n, "calculation").collect();
                 require(calc.len() <= 1, "UNSUPPORTED_SHAPE", "Multiple calculations in a column")?;
                 let formula = calc.first().and_then(|c| xml.value(*c, "formula")).map(str::to_owned);
@@ -185,13 +189,13 @@ impl Workbook {
                     continue;
                 };
                 let name = xml.text_content(local)?.to_owned();
-                let key = (id, name.clone());
-                if field_ids.contains_key(&key) {
+
+                if field_ids[id.0 as usize].contains_key(name.as_str()) {
                     continue;
                 }
                 let dtype = xml.named_children(n, "local-type").next().map(|t| xml.text_content(t)).transpose()?.unwrap_or("unknown").to_owned();
                 let fid = FieldId(fields.len() as u32);
-                field_ids.insert(key, fid);
+                field_ids[id.0 as usize].insert(name.clone(), fid);
                 fields.push(Field {
                     datasource: id,
                     caption: name.clone(),
@@ -219,7 +223,7 @@ impl Workbook {
             let begin = dependency_fields.len();
             for n in xml.named_children(scope, "column") {
                 let name = xml.value(n, "name");
-                let fid = ds.and_then(|d| name.and_then(|name| field_ids.get(&(d,name.into())))).copied();
+                let fid = ds.and_then(|d| name.and_then(|name| field_ids[d.0 as usize].get(name))).copied();
                 if let Some(fid) = fid {
                     fields[fid.0 as usize].copies.push(n);
                     dependency_fields.push(fid);
@@ -240,8 +244,7 @@ impl Workbook {
             });
         }
         // Build worksheet instance resolution once; avoid a document scan per filter.
-        let mut instances:BTreeMap<(NodeId,DatasourceId,String),
-        BTreeSet<FieldId>>=BTreeMap::new();
+        let mut instances:BTreeMap<(NodeId,DatasourceId), BTreeMap<String,BTreeSet<FieldId>>>=BTreeMap::new();
         for idx in 0..xml.nodes.len(){
             let n=NodeId(idx as u32);
             if xml.tag(n)!="column-instance"{
@@ -257,8 +260,8 @@ impl Workbook {
                 continue;
             };
             if let(Some(name),Some(column))=(xml.value(n,"name"),xml.value(n,"column")){
-                if let Some(fid)=field_ids.get(&(*dsid,column.into())){
-                    instances.entry((sheet,*dsid,name.into())).or_default().insert(*fid);
+                if let Some(fid)=field_ids[dsid.0 as usize].get(column){
+                    instances.entry((sheet,*dsid)).or_default().entry(name.into()).or_default().insert(*fid);
                 }
             }
         }
@@ -268,16 +271,17 @@ impl Workbook {
             let Some(sheet) = xml.ancestor(n,"worksheet") else { continue; };
             let resolve_qualified = |ds:&str, instance:&str| -> Option<FieldId> {
                 let dsid = *ds_ids.get(ds)?;
-                field_ids.get(&(dsid,instance.into())).copied().or_else(|| {
-                    let ids = instances.get(&(sheet,dsid,instance.into()))?;
+                field_ids[dsid.0 as usize].get(instance).copied().or_else(|| {
+                    let ids = instances.get(&(sheet,dsid))?.get(instance)?;
                     (ids.len()==1).then(||ids.iter().next().copied()).flatten()
                 })
             };
-            for attr in xml.attributes(n) {
-                if attr.name != "column" || xml.tag(n)=="column-instance" { continue; }
-                if let Ok((ds,field)) = formula::qualified(attr.value) {
-                    if let Some(field_id) = resolve_qualified(&ds,&field) {
-                        known_uses.push(FieldUse { field_id,worksheet_node:sheet,node_id:n,kind:"column_binding" });
+            if xml.tag(n) != "column-instance" {
+                if let Some(column) = xml.value(n, "column") {
+                    if let Ok((ds,field)) = formula::qualified(column) {
+                        if let Some(field_id) = resolve_qualified(&ds,&field) {
+                            known_uses.push(FieldUse { field_id,worksheet_node:sheet,node_id:n,kind:"column_binding" });
+                        }
                     }
                 }
             }
@@ -311,9 +315,9 @@ impl Workbook {
                     let mut field = None;
                     if let Ok((ds, instance)) = formula::qualified(&column) {
                         if let Some(dsid) = ds_ids.get(&ds) {
-                            field = field_ids.get(&(*dsid, instance.clone())).copied();
+                            field = field_ids[dsid.0 as usize].get(instance.as_str()).copied();
                             if field.is_none() {
-                                if let Some(resolved)=instances.get(&(sheet,*dsid,instance.clone())) {
+                                if let Some(resolved)=instances.get(&(sheet,*dsid)).and_then(|m|m.get(instance.as_str())) {
                                     if resolved.len()==1 {
                                         field=resolved.iter().next().copied();
                                     }
@@ -344,6 +348,7 @@ impl Workbook {
             fields,
             filters,
             edges: Vec::new(),
+            referrer_order: Vec::new(), filter_order: Vec::new(),
             ref_offsets: Vec::new(),
             dependency_scopes, dependency_fields, local_definitions, known_uses,
             diagnostics: Vec::new(),
@@ -376,7 +381,7 @@ impl Workbook {
             Some(name) => *self.datasource_lookup.get(name)
             .ok_or_else(|| Error::new("UNRESOLVED_REFERENCE", format!("Unknown datasource {name}")))?,
         };
-        self.field_lookup.get(&(ds,r.field.clone())).copied()
+        self.field_lookup.get(ds.0 as usize).and_then(|m|m.get(r.field.as_str())).copied()
         .ok_or_else(||Error::new("UNRESOLVED_REFERENCE",format!("Use an inspected internal field name: {}",r.field)))
     }
     fn build_refs(&mut self) {
@@ -430,6 +435,10 @@ impl Workbook {
         for i in 1..self.ref_offsets.len() {
             self.ref_offsets[i] += self.ref_offsets[i-1];
         }
+        self.referrer_order = (0..edges.len()).collect();
+        self.referrer_order.sort_unstable_by_key(|i| (edges[*i].to, edges[*i].from));
+        self.filter_order = (0..self.filters.len()).collect();
+        self.filter_order.sort_unstable_by_key(|i| (self.filters[*i].field, self.filters[*i].id));
         self.edges = edges;
         diagnostics.sort();
         self.diagnostics = diagnostics;
@@ -481,25 +490,46 @@ impl Workbook {
         for usage in &self.known_uses {
             if affected[usage.field_id.0 as usize] { sheets.insert(usage.worksheet_node); }
         }
-        for sheet in sheets {
-            let mut declared=BTreeSet::new();
-            for scope in self.dependency_scopes.iter().filter(|s|s.worksheet==Some(sheet)) {
-                for &f in &self.dependency_fields[scope.fields.clone()] {
-                    require(declared.insert(f),"DEPENDENCY_UPDATE_REQUIRED","Duplicate worksheet declarations prevent unambiguous dependency proof")?;
+        // Build owner ranges once per operation, not one full scan per worksheet.
+        let mut scopes: Vec<_> = self.dependency_scopes.iter().enumerate()
+            .filter_map(|(i,s)| s.worksheet.map(|w| (w,i))).collect();
+        scopes.sort_unstable();
+        let mut uses: Vec<_> = self.known_uses.iter().enumerate().map(|(i,u)| (u.worksheet_node,i)).collect();
+        uses.sort_unstable();
+        let mut declared = vec![0usize; self.fields.len()];
+        let mut seen = vec![0usize; self.fields.len()];
+        let mut pending = Vec::new();
+        for (iteration, sheet) in sheets.into_iter().enumerate() {
+            let epoch = iteration + 1; pending.clear();
+            let start = scopes.partition_point(|(w,_)| *w < sheet);
+            let end = scopes.partition_point(|(w,_)| *w <= sheet);
+            for &(_,i) in &scopes[start..end] {
+                for &field in &self.dependency_fields[self.dependency_scopes[i].fields.clone()] {
+                    let slot = &mut declared[field.0 as usize];
+                    require(*slot != epoch,"DEPENDENCY_UPDATE_REQUIRED","Duplicate worksheet declarations prevent unambiguous dependency proof")?;
+                    *slot = epoch;
+                    if affected[field.0 as usize] { pending.push(field); }
                 }
             }
-            let mut seen=BTreeSet::new();
-            let mut pending:Vec<FieldId>=declared.iter().filter(|f|affected[f.0 as usize]).copied().collect();
-            pending.extend(self.known_uses.iter().filter(|u|u.worksheet_node==sheet&&affected[u.field_id.0 as usize]).map(|u|u.field_id));
-            while let Some(field)=pending.pop() {
-                if !seen.insert(field) { continue; }
-                require(declared.contains(&field),"DEPENDENCY_UPDATE_REQUIRED",format!(
-                    "Worksheet {} needs an explicit dependency for {}; v1 will not invent it",
-                    self.xml.value(sheet,"name").unwrap_or("?"),self.field_key(field)))?;
-                let key=self.field_key(field);
-                require(!self.diagnostics.iter().any(|d|d.object==key),"DEPENDENCY_UPDATE_REQUIRED",
-                    format!("Dependency closure for {key} contains an unanalyzed calculation"))?;
-                let i=field.0 as usize;
+            pending.sort_unstable();
+            let start = uses.partition_point(|(w,_)| *w < sheet);
+            let end = uses.partition_point(|(w,_)| *w <= sheet);
+            pending.extend(uses[start..end].iter().map(|(_,i)|self.known_uses[*i].field_id).filter(|f|affected[f.0 as usize]));
+            while let Some(field) = pending.pop() {
+                let i = field.0 as usize;
+                if seen[i] == epoch { continue; } seen[i] = epoch;
+                if declared[i] != epoch {
+                    return Err(Error::new("DEPENDENCY_UPDATE_REQUIRED",format!(
+                        "Worksheet {} needs an explicit dependency for {}; v1 will not invent it",
+                        self.xml.value(sheet,"name").unwrap_or("?"),self.field_key(field))));
+                }
+                if !self.diagnostics.is_empty() {
+                    let key = self.field_key(field);
+                    if self.diagnostics.iter().any(|d|d.object==key) {
+                        return Err(Error::new("DEPENDENCY_UPDATE_REQUIRED",format!(
+                            "Dependency closure for {key} contains an unanalyzed calculation")));
+                    }
+                }
                 pending.extend(self.edges[self.ref_offsets[i] as usize..self.ref_offsets[i+1] as usize].iter().map(|e|e.to));
             }
         }
@@ -639,6 +669,13 @@ impl Workbook {
     }
     pub fn field_report(&self, i: usize) -> Value {
         let f=&self.fields[i];
+        let id = FieldId(i as u32);
+        let ub = self.known_uses.partition_point(|u| u.field_id < id);
+        let ue = self.known_uses.partition_point(|u| u.field_id <= id);
+        let rb = self.referrer_order.partition_point(|e| self.edges[*e].to < id);
+        let re = self.referrer_order.partition_point(|e| self.edges[*e].to <= id);
+        let fb = self.filter_order.partition_point(|f| self.filters[*f].field < Some(id));
+        let fe = self.filter_order.partition_point(|f| self.filters[*f].field <= Some(id));
         let parameter=if f.parameter {
             Some(match self.parameter_state(FieldId(i as u32)) {
                 Ok((current,domain))=>json!({
@@ -671,16 +708,15 @@ impl Workbook {
             },
             "parameter":parameter,
             "definition_copies":f.copies.len(),
-            "declared_in_worksheets":self.dependency_scopes.iter()
-                .filter(|s|self.dependency_fields[s.fields.clone()].contains(&FieldId(i as u32)))
-                .filter_map(|s|s.worksheet.and_then(|w|self.xml.value(w,"name")))
-                .collect::<BTreeSet<_>>(),
-            "known_worksheet_uses":self.known_uses.iter().filter(|u|u.field_id==FieldId(i as u32))
+            "declared_in_worksheets":f.copies.iter()
+                .filter_map(|n|self.xml.ancestor(*n,"worksheet"))
+                .filter_map(|w|self.xml.value(w,"name")).collect::<BTreeSet<_>>(),
+            "known_worksheet_uses":self.known_uses[ub..ue].iter()
                 .filter_map(|u|self.xml.value(u.worksheet_node,"name")).collect::<BTreeSet<_>>(),
-            "referenced_by_calculations":self.edges.iter().filter(|e|e.to==FieldId(i as u32))
-                .map(|e|e.from).collect::<Vec<_>>(),
-            "filters":self.filters.iter().filter(|filter|filter.field==Some(FieldId(i as u32)))
-                .map(|filter|filter.id).collect::<Vec<_>>(),
+            "referenced_by_calculations":self.referrer_order[rb..re].iter()
+                .map(|e|self.edges[*e].from).collect::<Vec<_>>(),
+            "filters":self.filter_order[fb..fe].iter()
+                .map(|f|self.filters[*f].id).collect::<Vec<_>>(),
             "usage_coverage":"Known global formula edges, worksheet declarations, column bindings and shelves; not complete Tableau lineage"
         })
     }

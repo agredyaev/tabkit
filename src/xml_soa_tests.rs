@@ -5,21 +5,18 @@ fn parse(source: &str) -> Xml {
     Xml::parse(source.as_bytes().to_vec(), &Limits::default()).unwrap()
 }
 fn check_columns(xml: &Xml) {
-    let t = &xml.attributes;
-    assert_eq!(t.len(), t.source_values.len());
-    assert_eq!(t.len(), t.decoded_values.len());
-    assert_eq!(t.len(), t.quotes.len());
-    for index in 0..t.len() {
-        let a = xml.attribute(index);
-        assert_eq!(a.name.as_ptr(), xml.text[t.names[index].range()].as_ptr());
-        let expected = match t.decoded_values[index] {
-            Some(span) => &t.decoded_text[span.range()],
-            None => &xml.text[t.source_values[index].range()],
-        };
-        assert_eq!(a.value.as_ptr(), expected.as_ptr());
-        assert_eq!(a.value, expected);
-        assert_eq!(xml.text.as_bytes()[a.span.start as usize - 1], a.quote);
-        assert_eq!(xml.text.as_bytes()[a.span.end as usize], a.quote);
+    assert_eq!(xml.normalized.source_starts.len(), xml.normalized.spans.len());
+    assert!(xml.normalized.source_starts.windows(2).all(|p| p[0] < p[1]));
+    for i in 0..xml.nodes.len() {
+        let node = xml.node(NodeId(i as u32));
+        for a in xml.attributes(NodeId(i as u32)) {
+            let begin = a.name.as_ptr() as usize - xml.text.as_ptr() as usize;
+            assert_eq!(&xml.text[begin..begin+a.name.len()], a.name);
+            let expected = xml.attribute_value(a.span, node.normalized.clone());
+            assert_eq!(a.value.as_ptr(), expected.as_ptr());
+            assert_eq!(xml.text.as_bytes()[a.span.start as usize-1], a.quote);
+            assert_eq!(xml.text.as_bytes()[a.span.end as usize], a.quote);
+        }
     }
 }
 #[test]
@@ -27,9 +24,8 @@ fn plain_values_borrow_source_and_only_transformed_values_use_the_pool() {
     let x = parse("<workbook plain='España 🦀' empty='' a='A&amp;B&#10;C' b='x\r\ny\t' />");
     check_columns(&x);
     assert_eq!(x.attributes(NodeId(0)).count(), 4);
-    assert_eq!(x.attributes.decoded_values, vec![None, None,
-        Some(Span { start: 0, end: 5 }), Some(Span { start: 5, end: 9 })]);
-    assert_eq!(x.attributes.decoded_text, "A&B\nCx y ");
+    assert_eq!(x.normalized.spans, vec![Span { start: 0, end: 5 }, Span { start: 5, end: 9 }]);
+    assert_eq!(x.normalized.text, "A&B\nCx y ");
     assert_eq!(x.value(NodeId(0), "plain"), Some("España 🦀"));
     assert_eq!(x.value(NodeId(0), "empty"), Some(""));
     assert!(x.attr(NodeId(0), "missing").is_none());
@@ -85,7 +81,7 @@ fn separate_documents_never_share_mutable_decoded_storage() {
 fn empty_tables_and_unicode_names_keep_exact_source_spans() {
     let empty = parse("<workbook><leaf/></workbook>");
     check_columns(&empty);
-    assert!(empty.attributes.decoded_text.is_empty());
+    assert!(empty.normalized.text.is_empty());
     assert_eq!(empty.attributes(NodeId(0)).len(), 0);
     assert_eq!(empty.attributes(NodeId(1)).len(), 0);
     let source = "<workbook café='é' 名='&#x1F980;' a='&amp;amp;'/>";

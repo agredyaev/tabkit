@@ -54,6 +54,8 @@ pub struct Node {
     pub span: Span,
     pub attributes: Range<usize>,
     leaf_text: Option<LeafTextId>,
+    raw_attributes: Span,
+    normalized: Range<usize>,
 }
 /// A borrowed view of one row; it owns no text and is never stored per attribute.
 #[derive(Clone, Copy)]
@@ -63,118 +65,28 @@ pub struct Attribute<'a> {
     pub span: Span,
     pub quote: u8,
 }
-/// Frozen parallel columns. Every name and unchanged value refers to `Xml::text`.
-/// Only normalized values occupy the single document-local decoded buffer.
+/// Sparse normalization columns; ordinary attributes stay only in source bytes.
 #[derive(Default)]
-struct AttributeTable {
-    names: Vec<Span>,
-    source_values: Vec<Span>,
-    decoded_values: Vec<Option<Span>>,
-    quotes: Vec<u8>,
-    decoded_text: String,
-}
-impl AttributeTable {
-    fn len(&self) -> usize { self.names.len() }
-    fn reserve(&mut self, additional: usize) {
-        self.names.reserve(additional);
-        self.source_values.reserve(additional);
-        self.decoded_values.reserve(additional);
-        self.quotes.reserve(additional);
-    }
+struct Normalized {
+    source_starts: Vec<u32>,
+    spans: Vec<Span>,
+    text: String,
 }
 pub struct Xml {
     pub text: String,
     pub nodes: Vec<Node>,
-    attributes: AttributeTable,
+    normalized: Normalized,
     names: Names,
-    leaf_texts: Vec<String>,
+    leaf_texts: Vec<Span>,
+    leaf_text: String,
+    worksheet_owners: Vec<Option<NodeId>>,
+    dependency_owners: Vec<Option<NodeId>>,
     pub sha256: String,
 }
 impl Xml {
+    pub fn into_text(self) -> String { self.text }
     pub fn parse(bytes: Vec<u8>, limits: &Limits) -> Result<Self> {
-        require(bytes.len() as u64 <= limits.xml_bytes, "LIMIT", "TWB is too large")?;
-        let text = String::from_utf8(bytes).map_err(|_| Error::new("ENCODING", "Only UTF-8 TWB is supported; no implicit transcoding"))?;
-        let options = roxmltree::ParsingOptions {
-            allow_dtd: false,
-            nodes_limit: limits.xml_nodes
-        };
-        let doc = roxmltree::Document::parse_with_options(&text, options)
-        .map_err(|e| Error::new("XML", e.to_string()))?;
-        check_encoding_declaration(&text)?;
-        require(doc.root_element().tag_name().namespace().is_none(), "UNSUPPORTED_SHAPE", "Namespaced workbook roots are unsupported")?;
-        // Count admitted elements once to size the frozen table without geometric slack.
-        let count=doc.descendants().filter(|n|n.is_element()).count();
-        let mut nodes: Vec<Node> = Vec::with_capacity(count);
-        let mut attributes = AttributeTable::default();
-        let mut names = Names::default();
-        let mut name_lookup = BTreeMap::new();
-        let mut leaf_texts = Vec::new();
-        // Preorder links need only the open ancestors, not a map per parsed node.
-        let mut ancestors: Vec<(NodeId,Option<NodeId>)> = Vec::new();
-        for n in doc.descendants().filter(|n| n.is_element()) {
-            let id = NodeId(nodes.len() as u32);
-            let range=n.range();
-            while ancestors.last().is_some_and(|(id,_)|nodes[id.0 as usize].span.end as usize<=range.start) {
-                ancestors.pop();
-            }
-            let parent=ancestors.last().map(|(id,_)|*id);
-            let begin = attributes.len();
-            // Reserve the admitted attribute batch before appending to avoid per-item capacity jumps.
-            attributes.reserve(n.attributes().len());
-            scan_attributes(&text, range.start, &mut attributes)?;
-            let end = attributes.len();
-            // Borrow parser names during admission; allocate each distinct tag once.
-            let tag=n.tag_name();
-            let key=(tag.namespace(),tag.name());
-            let name_id=match name_lookup.get(&key) {
-                Some(id)=>*id,
-                None=>{
-                    let id=TextId(names.strings.len() as u32);
-                    names.strings.push(match key.0 {
-                        None=>key.1.to_owned(),Some(ns)=>format!("{{{ns}}}{}",key.1),
-                    });
-                    name_lookup.insert(key,id);
-                    id
-                }
-            };
-            // Read character data in its original namespace context. No fragment parser.
-            let leaf_text = if !n.children().any(|c| c.is_element()) {
-                let text: String = n.children().filter(|c| c.is_text())
-                    .filter_map(|c| c.text()).collect();
-                if text.is_empty() { None } else {
-                    let id = LeafTextId(leaf_texts.len() as u32);
-                    leaf_texts.push(text);
-                    Some(id)
-                }
-            } else { None };
-            nodes.push(Node {
-                parent,
-                first_child: None,
-                next_sibling: None,
-                name: name_id,
-                span: Span::new(range)?,
-                attributes: begin..end,
-                leaf_text
-            });
-            if let Some((p,last_child))=ancestors.last_mut() {
-                if let Some(last)=*last_child { nodes[last.0 as usize].next_sibling=Some(id); }
-                else { nodes[p.0 as usize].first_child=Some(id); }
-                *last_child=Some(id);
-            }
-            ancestors.push((id,None));
-        }
-        drop(name_lookup);
-        drop(doc);
-        require(!nodes.is_empty(), "XML", "Empty XML document")?;
-        let sha256 = crate::fs::sha256(text.as_bytes());
-        Ok(Self {
-            text,
-            nodes,
-            attributes,
-            names,
-            leaf_texts,
-            sha256
-        })
+        stream::parse(bytes, limits)
     }
     pub fn node(&self, id: NodeId) -> &Node {
         &self.nodes[id.0 as usize]
@@ -182,28 +94,27 @@ impl Xml {
     pub fn tag(&self, id: NodeId) -> &str {
         self.names.get(self.node(id).name)
     }
-    fn attribute(&self, index: usize) -> Attribute<'_> {
-        let table = &self.attributes;
-        let span = table.source_values[index];
-        let value = match table.decoded_values[index] {
-            Some(decoded) => &table.decoded_text[decoded.range()],
-            None => &self.text[span.range()],
-        };
-        Attribute {
-            name: &self.text[table.names[index].range()],
-            value,
-            span,
-            quote: table.quotes[index],
+    fn attribute_value(&self, value: Span, normalized: Range<usize>) -> &str {
+        let starts = &self.normalized.source_starts[normalized.clone()];
+        match starts.binary_search(&value.start) {
+            Ok(i) => &self.normalized.text[self.normalized.spans[normalized.start+i].range()],
+            Err(_) => &self.text[value.range()],
         }
     }
-    pub fn attributes(&self, id: NodeId) -> impl ExactSizeIterator<Item=Attribute<'_>> + DoubleEndedIterator {
-        self.node(id).attributes.clone().map(|index| self.attribute(index))
+    pub fn attributes(&self, id: NodeId) -> attrs::Attributes<'_> {
+        let node = self.node(id);
+        attrs::Attributes::new(self, node.raw_attributes, node.attributes.len(), node.normalized.clone())
     }
     pub fn attr(&self, id: NodeId, name: &str) -> Option<Attribute<'_>> {
-        // Search only the name column; resolve value/patch metadata for the match.
-        self.node(id).attributes.clone()
-            .find(|&index| self.text[self.attributes.names[index].range()] == *name)
-            .map(|index| self.attribute(index))
+        // Scan only this admitted start tag; decode metadata only for the match.
+        let mut it = self.attributes(id);
+        while let Some((key, value, quote)) = it.next_spans() {
+            if self.text[key.range()] == *name {
+                return Some(Attribute { name: &self.text[key.range()],
+                    value: self.attribute_value(value, self.node(id).normalized.clone()), span: value, quote });
+            }
+        }
+        None
     }
     pub fn value(&self, id: NodeId, name: &str) -> Option<&str> {
         self.attr(id, name).map(|a| a.value)
@@ -223,10 +134,12 @@ impl Xml {
     pub fn one_child(&self, id: NodeId, tag: &str) -> Result<NodeId> {
         let mut it = self.named_children(id, tag);
         let first = it.next().ok_or_else(|| Error::new("UNSUPPORTED_SHAPE", format!("Missing {tag}")))?;
-        require(it.next().is_none(), "AMBIGUOUS_TARGET", format!("Multiple {tag} elements"))?;
+        if it.next().is_some() { return Err(Error::new("AMBIGUOUS_TARGET", format!("Multiple {tag} elements"))); }
         Ok(first)
     }
     pub fn ancestor(&self, id: NodeId, tag: &str) -> Option<NodeId> {
+        if tag == "worksheet" { return self.worksheet_owners[id.0 as usize]; }
+        if tag == "datasource-dependencies" { return self.dependency_owners[id.0 as usize]; }
         let mut p = self.node(id).parent;
         while let Some(n) = p {
             if self.tag(n) == tag {
@@ -239,7 +152,7 @@ impl Xml {
     pub fn text_content(&self, id: NodeId) -> Result<&str> {
         require(self.node(id).first_child.is_none(), "UNSUPPORTED_SHAPE",
             "Expected a leaf element, not mixed or nested content")?;
-        Ok(self.node(id).leaf_text.map(|i| self.leaf_texts[i.0 as usize].as_str()).unwrap_or(""))
+        Ok(self.node(id).leaf_text.map(|i| &self.leaf_text[self.leaf_texts[i.0 as usize].range()]).unwrap_or(""))
     }
 
 }
@@ -258,57 +171,6 @@ impl Iterator for Children<'_> {
 fn whitespace(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r')
 }
-/// This locates ranges only AFTER roxmltree has validated the document.
-fn scan_attributes(text: &str, start: usize, out: &mut AttributeTable) -> Result<()> {
-    let bytes = text.as_bytes();
-    let mut p = start + 1;
-    while p < bytes.len() && !whitespace(bytes[p]) && !matches!(bytes[p], b'/' | b'>') {
-        p += 1;
-    }
-    loop {
-        while p < bytes.len() && whitespace(bytes[p]) {
-            p += 1;
-        }
-        require(p < bytes.len(), "XML", "Unterminated tag")?;
-        if matches!(bytes[p], b'/' | b'>') {
-            break;
-        }
-        let ns = p;
-        while p < bytes.len() && !whitespace(bytes[p]) && bytes[p] != b'=' {
-            p += 1;
-        }
-        let name = Span::new(ns..p)?;
-        while p < bytes.len() && whitespace(bytes[p]) {
-            p += 1;
-        }
-        require(bytes.get(p) == Some(&b'='), "XML", "Missing attribute equals")?;
-        p += 1;
-        while p < bytes.len() && whitespace(bytes[p]) {
-            p += 1;
-        }
-        let quote = *bytes.get(p).ok_or_else(|| Error::new("XML", "Missing quote"))?;
-        require(quote == b'\'' || quote == b'"', "XML", "Invalid quote")?;
-        p += 1;
-        let begin = p;
-        while p < bytes.len() && bytes[p] != quote {
-            p += 1;
-        }
-        require(p < bytes.len(), "XML", "Unterminated attribute")?;
-        let span = Span::new(begin..p)?;
-        let raw = &text[begin..p];
-        let decoded = if raw.contains(['&', '\r', '\n', '\t']) {
-            let start = out.decoded_text.len();
-            decode_attribute(raw, &mut out.decoded_text)?;
-            Some(Span::new(start..out.decoded_text.len())?)
-        } else { None };
-        out.names.push(name);
-        out.source_values.push(span);
-        out.decoded_values.push(decoded);
-        out.quotes.push(quote);
-        p += 1;
-    }
-    Ok(())
-}
 fn decode_attribute(raw: &str, out: &mut String) -> Result<()> {
     // Literal XML whitespace is normalized; whitespace from references is not.
     // Append only transformed values; no per-attribute allocation or self-borrow.
@@ -325,24 +187,7 @@ fn decode_attribute(raw: &str, out: &mut String) -> Result<()> {
         }
         let end=rest.find(';').ok_or_else(|| Error::new("XML", "Unterminated entity"))?;
         let entity=&rest[..end];
-        let ch = match entity {
-            "amp" => '&',
-            "lt" => '<',
-            "gt" => '>',
-            "quot" => '"',
-            "apos" => '\'',
-            _ => {
-                let n = if let Some(hex) = entity.strip_prefix("#x") {
-                    u32::from_str_radix(hex, 16).ok()
-                }
-                else if let Some(dec) = entity.strip_prefix('#') {
-                    dec.parse::<u32>().ok()
-                } else {
-                    None
-                };
-                n.and_then(char::from_u32).ok_or_else(|| Error::new("XML", "Unsupported entity"))?
-            }
-        };
+        let ch = stream::reference(entity)?;
         out.push(ch);
         rest=&rest[end+1..];
     }
@@ -391,3 +236,15 @@ fn check_encoding_declaration(text:&str)->Result<()> {
 #[cfg(test)]
 #[path = "xml_soa_tests.rs"]
 mod soa_tests;
+
+#[path = "xml_stream.rs"]
+mod stream;
+#[path = "xml_attrs.rs"]
+mod attrs;
+fn valid_xml_char(c: char) -> bool {
+    matches!(c, '\t' | '\r' | '\n') || (c >= ' ' && !matches!(c, '\u{fffe}' | '\u{ffff}'))
+}
+
+#[cfg(test)]
+#[path = "xml_stream_tests.rs"]
+mod stream_tests;
