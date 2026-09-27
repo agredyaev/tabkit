@@ -50,3 +50,18 @@ fn field_lookup_is_scoped_to_datasource_and_keeps_duplicate_rejection() {
     let duplicate=source.replace("<column name='[X]'/>","<column name='[X]'/><column name='[X]'/>");
     assert_eq!(Workbook::parse(duplicate.into_bytes(),&Limits::default()).err().unwrap().code,"AMBIGUOUS_TARGET");
 }
+
+#[test]
+fn admitted_formula_override_preflight_matches_candidate_graph_failures() {
+    let config=cfg(); let hash=fs::sha256(GOOD.as_bytes());
+    for (formula,code) in [
+        ("[Calculation_Ratio]","REFERENCE_CYCLE"),
+        ("[Missing]","UNRESOLVED_REFERENCE"),
+    ] {
+        let changes=ChangeSet{schema_version:1,input_sha256:hash.clone(),operations:vec![
+            Operation::SetCalculation{field_id:FieldId(3),expected_formula:"[Profit] / [Sales]".into(),formula:formula.into()}]};
+        let e=edit::plan_owned("in.twb",&hash,
+            Workbook::parse(GOOD.as_bytes().to_vec(),&config.limits).unwrap(),changes,&config).err().unwrap();
+        assert_eq!(e.code,code);
+    }
+}

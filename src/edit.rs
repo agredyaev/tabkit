@@ -123,6 +123,8 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
     let mut patches = Vec::new();
     let mut warnings = Vec::new();
     let mut touched = BTreeSet::new();
+    let mut formula_overrides:Vec<Option<Vec<FieldId>>>=std::iter::repeat_with(||None)
+        .take(book.fields.len()).collect();
     for operation in &changes.operations {
         let key = match operation {
             Operation::SetCalculation {
@@ -157,8 +159,13 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
                 require(!field.parameter, "TYPE_MISMATCH", "Use set_parameter for parameters")?;
                 require(field.formula.as_deref() == Some(expected_formula), "STALE_PRECONDITION", "Calculation formula changed")?;
                 let analysis = formula::analyze(new)?;
+                let mut targets=Vec::with_capacity(analysis.references.len());
                 for reference in &analysis.references {
-                    book.resolve(field.datasource, reference)?;
+                    targets.push(book.resolve(field.datasource, reference)?);
+                }
+                targets.sort_unstable(); targets.dedup();
+                if new != expected_formula {
+                    formula_overrides[field_id.0 as usize]=Some(targets);
                 }
                 warnings.extend(analysis.warnings);
                 warnings.push("Formula semantics/result type/aggregation need verification in Tableau 2025; local checks are not a Tableau compiler".into());
@@ -270,6 +277,7 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
         }
     }
     patches.sort_by_key(|p| (p.span.start,p.span.end));
+    book.validate_calculation_overrides(&formula_overrides)?;
 
     Ok(Prepared { changes, before, expected, patches, warnings,
         twb_sha256: book.xml.sha256.clone(), before_checks: crate::validation::local(book) })

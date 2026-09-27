@@ -446,40 +446,53 @@ impl Workbook {
         diagnostics.sort();
         self.diagnostics = diagnostics;
     }
-    pub fn require_acyclic(&self) -> Result<()> {
-        let mut indegree = vec![0u32; self.fields.len()];
-        for e in &self.edges {
-            indegree[e.to.0 as usize] += 1;
-        }
-        let mut ready: VecDeque<usize> = indegree.iter().enumerate().filter_map(|(i, n)| (*n == 0).then_some(i)).collect();
-        let mut count = 0;
-        while let Some(i) = ready.pop_front() {
-            count += 1;
-            for e in &self.edges[self.ref_offsets[i] as usize..self.ref_offsets[i+1] as usize] {
-                let j = e.to.0 as usize;
-                indegree[j] -= 1;
-                if indegree[j] == 0 {
-                    ready.push_back(j);
-                }
+    /// Validate the calculation graph that would exist after replacing selected formulas.
+    /// None keeps the admitted field edges; Some is the fully resolved replacement edge list.
+    pub(crate) fn validate_calculation_overrides(&self, overrides: &[Option<Vec<FieldId>>]) -> Result<()> {
+        require(overrides.len() == self.fields.len(), "INTERNAL", "Formula override table length mismatch")?;
+        let mut edges=Vec::with_capacity(self.edges.len());
+        for i in 0..self.fields.len() {
+            let from=FieldId(i as u32);
+            if let Some(targets)=&overrides[i] {
+                edges.extend(targets.iter().copied().map(|to|Edge{from,to}));
+            } else {
+                edges.extend(self.edges[self.ref_offsets[i] as usize..self.ref_offsets[i+1] as usize]
+                    .iter().map(|e|Edge{from:e.from,to:e.to}));
             }
         }
-        require(count == self.fields.len(), "REFERENCE_CYCLE", "Known calculation references contain a cycle")
+        let offsets=edge_offsets(self.fields.len(),&edges);
+        require_acyclic_edges(self.fields.len(),&edges,&offsets)?;
+        let changed:Vec<_>=overrides.iter().enumerate()
+            .filter_map(|(i,v)|v.as_ref().map(|_|FieldId(i as u32))).collect();
+        self.require_calculation_dependencies_edges(&changed,&edges,&offsets,overrides)
+    }
+    pub fn require_acyclic(&self) -> Result<()> {
+        require_acyclic_edges(self.fields.len(),&self.edges,&self.ref_offsets)
     }
     /// Refuse changes requiring a worksheet dependency rewrite that v1 does not implement.
     /// This is an edit-admission rule, not an assertion about every valid Tableau XML form.
     pub fn require_calculation_dependencies(&self, changed: &[FieldId]) -> Result<()> {
+        let overrides:Vec<Option<Vec<FieldId>>>=std::iter::repeat_with(||None).take(self.fields.len()).collect();
+        self.require_calculation_dependencies_edges(changed,&self.edges,&self.ref_offsets,&overrides)
+    }
+    fn require_calculation_dependencies_edges(&self, changed: &[FieldId], edges:&[Edge],
+        ref_offsets:&[u32], overrides:&[Option<Vec<FieldId>>]) -> Result<()> {
         for &id in changed { self.field(id)?; }
         if changed.is_empty(){return Ok(());}
-        let mut reverse: Vec<(FieldId,FieldId)> = self.edges.iter().map(|e|(e.to,e.from)).collect();
-        reverse.sort_unstable();
-        let mut offsets = vec![0usize;self.fields.len()+1];
-        for (to,_) in &reverse { offsets[to.0 as usize+1]+=1; }
-        for i in 1..offsets.len() { offsets[i]+=offsets[i-1]; }
+        let mut reverse_offsets=vec![0usize;self.fields.len()+1];
+        for e in edges { reverse_offsets[e.to.0 as usize+1]+=1; }
+        for i in 1..reverse_offsets.len(){reverse_offsets[i]+=reverse_offsets[i-1];}
+        let mut cursor=reverse_offsets.clone();
+        let mut reverse=vec![FieldId(0);edges.len()];
+        for e in edges {
+            let slot=&mut cursor[e.to.0 as usize];
+            reverse[*slot]=e.from; *slot+=1;
+        }
         let mut affected = vec![false;self.fields.len()];
         for &id in changed { affected[id.0 as usize]=true; }
         let mut pending=changed.to_vec();
         while let Some(f)=pending.pop() {
-            for &(_,caller) in &reverse[offsets[f.0 as usize]..offsets[f.0 as usize+1]] {
+            for &caller in &reverse[reverse_offsets[f.0 as usize]..reverse_offsets[f.0 as usize+1]] {
                 if !affected[caller.0 as usize] { affected[caller.0 as usize]=true; pending.push(caller); }
             }
         }
@@ -526,14 +539,14 @@ impl Workbook {
                         "Worksheet {} needs an explicit dependency for {}; v1 will not invent it",
                         self.xml.value(sheet,"name").unwrap_or("?"),self.field_key(field))));
                 }
-                if !self.diagnostics.is_empty() {
+                if overrides[i].is_none() && !self.diagnostics.is_empty() {
                     let key = self.field_key(field);
                     if self.diagnostics.iter().any(|d|d.object==key) {
                         return Err(Error::new("DEPENDENCY_UPDATE_REQUIRED",format!(
                             "Dependency closure for {key} contains an unanalyzed calculation")));
                     }
                 }
-                pending.extend(self.edges[self.ref_offsets[i] as usize..self.ref_offsets[i+1] as usize].iter().map(|e|e.to));
+                pending.extend(edges[ref_offsets[i] as usize..ref_offsets[i+1] as usize].iter().map(|e|e.to));
             }
         }
         Ok(())
@@ -796,6 +809,27 @@ impl Workbook {
         }
         Ok(result)
     }
+}
+fn edge_offsets(fields:usize,edges:&[Edge])->Vec<u32>{
+    let mut offsets=vec![0u32;fields+1];
+    for e in edges { offsets[e.from.0 as usize+1]+=1; }
+    for i in 1..offsets.len(){offsets[i]+=offsets[i-1];}
+    offsets
+}
+fn require_acyclic_edges(fields:usize,edges:&[Edge],offsets:&[u32])->Result<()>{
+    let mut indegree=vec![0u32;fields];
+    for e in edges { indegree[e.to.0 as usize]+=1; }
+    let mut ready:VecDeque<usize>=indegree.iter().enumerate()
+        .filter_map(|(i,n)|(*n==0).then_some(i)).collect();
+    let mut count=0;
+    while let Some(i)=ready.pop_front(){
+        count+=1;
+        for e in &edges[offsets[i] as usize..offsets[i+1] as usize]{
+            let j=e.to.0 as usize; indegree[j]-=1;
+            if indegree[j]==0 {ready.push_back(j);}
+        }
+    }
+    require(count==fields,"REFERENCE_CYCLE","Known calculation references contain a cycle")
 }
 impl Xml {
     fn one_child_or_first_member(&self, n: NodeId) -> Result<NodeId> {
