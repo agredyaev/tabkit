@@ -4,9 +4,10 @@ use crate::{
         Result,
         require
     },
-    fs::sha256,
+    fs::{digest_hex, sha256},
     xml::Span
 };
+use sha2::{Digest, Sha256};
 use serde::{
     Deserialize,
     Serialize
@@ -30,6 +31,10 @@ pub struct Delta {
 /// Sorted, non-overlapping spans; copy unchanged runs once (linear, not repeated inserts).
 pub fn apply(input: &str, expected_hash: &str, patches: &[Patch], max: u64) -> Result<String> {
     require(sha256(input.as_bytes()) == expected_hash, "STALE_BASE", "TWB hash changed")?;
+    Ok(apply_admitted(input, patches, max)?.0)
+}
+/// Apply bytes already owned by an admitted immutable document. Hash the candidate while emitting it.
+pub fn apply_admitted(input: &str, patches: &[Patch], max: u64) -> Result<(String,String)> {
     let mut sorted: Vec<&Patch> = patches.iter().collect();
     sorted.sort_by_key(|p| (p.span.start, p.span.end));
     let mut cursor = 0usize;
@@ -47,15 +52,18 @@ pub fn apply(input: &str, expected_hash: &str, patches: &[Patch], max: u64) -> R
     require(length <= max && length <= usize::MAX as u64,"LIMIT","Patched XML exceeds limit")?;
     let mut out = String::new();
     out.try_reserve_exact(length as usize).map_err(|_|Error::new("LIMIT","Cannot reserve candidate buffer"))?;
+    let mut digest = Sha256::new();
     cursor = 0;
     for p in sorted {
         let r=p.span.range();
-        out.push_str(&input[cursor..r.start]);
-        out.push_str(&p.replacement);
+        let unchanged=&input[cursor..r.start];
+        out.push_str(unchanged); digest.update(unchanged.as_bytes());
+        out.push_str(&p.replacement); digest.update(p.replacement.as_bytes());
         cursor = r.end;
     }
-    out.push_str(&input[cursor..]);
-    Ok(out)
+    let tail=&input[cursor..];
+    out.push_str(tail); digest.update(tail.as_bytes());
+    Ok((out,digest_hex(digest.finalize().into())))
 }
 /// Independent preservation walk over input/output offsets, not a second serializer.
 pub fn verify_preservation(input: &str, output: &str, patches: &[Patch]) -> Result<()> {

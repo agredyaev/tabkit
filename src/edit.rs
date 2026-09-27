@@ -274,14 +274,15 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
     Ok(Prepared { changes, before, expected, patches, warnings,
         twb_sha256: book.xml.sha256.clone(), before_checks: crate::validation::local(book) })
 }
-fn emit_candidate(source: &str, p: &Prepared, cfg: &Config) -> Result<String> {
-    let candidate = patch::apply(source, &p.twb_sha256, &p.patches, cfg.limits.xml_bytes)?;
+fn emit_candidate(source: &str, p: &Prepared, cfg: &Config) -> Result<(String,String)> {
+    let (candidate, sha256) = patch::apply_admitted(source, &p.patches, cfg.limits.xml_bytes)?;
     patch::verify_preservation(source, &candidate, &p.patches)?;
-    Ok(candidate)
+    Ok((candidate,sha256))
 }
-fn complete(input: &str, p: Prepared, candidate: String, cfg: &Config) -> Result<(Plan, Workbook)> {
+fn complete(input: &str, p: Prepared, candidate: (String,String), cfg: &Config) -> Result<(Plan, Workbook)> {
     let Prepared { changes, before, expected, patches, mut warnings, twb_sha256, before_checks } = p;
-    let after = Workbook::parse(candidate.into_bytes(), &cfg.limits)?;
+    let (candidate,candidate_sha256)=candidate;
+    let after = Workbook::parse_with_sha256(candidate.into_bytes(), &cfg.limits, candidate_sha256)?;
     after.require_acyclic()?;
     let actual = after.snapshot()?;
     require(actual.len() == before.len() && actual.keys().eq(before.keys()) &&

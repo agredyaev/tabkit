@@ -88,6 +88,9 @@ impl Xml {
     pub fn parse(bytes: Vec<u8>, limits: &Limits) -> Result<Self> {
         stream::parse(bytes, limits)
     }
+    pub(crate) fn parse_with_sha256(bytes: Vec<u8>, limits: &Limits, sha256: String) -> Result<Self> {
+        stream::parse_with_sha256(bytes, limits, sha256)
+    }
     pub fn node(&self, id: NodeId) -> &Node {
         &self.nodes[id.0 as usize]
     }

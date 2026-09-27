@@ -129,6 +129,9 @@ impl Workbook {
     pub fn parse(bytes: Vec<u8>, limits: &Limits) -> Result<Self> {
         Self::from_xml(Xml::parse(bytes, limits)?)
     }
+    pub(crate) fn parse_with_sha256(bytes: Vec<u8>, limits: &Limits, sha256: String) -> Result<Self> {
+        Self::from_xml(Xml::parse_with_sha256(bytes, limits, sha256)?)
+    }
     pub fn from_xml(xml: Xml) -> Result<Self> {
         let root = NodeId(0);
         require(xml.tag(root) == "workbook", "FORMAT", "Expected a Tableau workbook root")?;

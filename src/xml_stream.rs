@@ -20,6 +20,10 @@ struct Builder<'a> {
     seen_root: bool, node_count: u32, attribute_count: usize,
 }
 pub(super) fn parse(bytes: Vec<u8>, limits: &Limits) -> Result<Xml> {
+    let sha256 = crate::fs::sha256(&bytes);
+    parse_with_sha256(bytes, limits, sha256)
+}
+pub(super) fn parse_with_sha256(bytes: Vec<u8>, limits: &Limits, sha256: String) -> Result<Xml> {
     require(bytes.len() as u64 <= limits.xml_bytes && bytes.len() <= u32::MAX as usize,
         "LIMIT", "TWB is too large")?;
     let text = String::from_utf8(bytes).map_err(|_| Error::new("ENCODING", "Only UTF-8 TWB is supported; no implicit transcoding"))?;
@@ -27,7 +31,7 @@ pub(super) fn parse(bytes: Vec<u8>, limits: &Limits) -> Result<Xml> {
         && !text.contains(['\u{fffe}', '\u{ffff}']), "XML", "XML 1.0 forbids this character")?;
     check_encoding_declaration(&text)?;
     let mut result = Builder::new(&text, limits).run()?;
-    result.sha256 = crate::fs::sha256(text.as_bytes()); result.text = text;
+    result.sha256 = sha256; result.text = text;
     Ok(result)
 }
 impl<'a> Builder<'a> {

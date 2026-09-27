@@ -89,6 +89,16 @@ fn xml_leaf_text_uses_original_namespace_context(){
     assert_eq!(xml.text_content(NodeId(1)).unwrap(),"A&B");
 }
 #[test]
+fn admitted_patch_emission_matches_checked_apply_and_hashes_candidate_once() {
+    let source="abc<d x='1'/>xyz";
+    let patch=patch::Patch{span:Span{start:9,end:10},expected:"1".into(),replacement:"2".into(),reason:"test".into()};
+    let hash=fs::sha256(source.as_bytes());
+    let checked=patch::apply(source,&hash,std::slice::from_ref(&patch),1024).unwrap();
+    let (admitted,candidate_hash)=patch::apply_admitted(source,std::slice::from_ref(&patch),1024).unwrap();
+    assert_eq!(checked,admitted);
+    assert_eq!(candidate_hash,fs::sha256(admitted.as_bytes()));
+}
+#[test]
 fn patch_budget_checked_before_candidate_allocation(){
     let p=patch::Patch{span:Span{start:1,end:2},expected:"b".into(),replacement:"0123456789".into(),reason:"test".into()};
     assert_eq!(patch::apply("abc",&fs::sha256(b"abc"),&[p],4).unwrap_err().code,"LIMIT");
