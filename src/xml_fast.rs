@@ -123,13 +123,15 @@ fn parse_inner(source:&str,limits:&Limits)->FastResult<Xml> {
             p+=1; skip_ws(bytes,&mut p);
             let quote=*bytes.get(p).ok_or(FastError::Unsupported)?;
             if !matches!(quote,b'\''|b'"') { return Err(FastError::Unsupported); }
-            p+=1; let value_start=p;
-            let Some(off)=memchr::memchr(quote,&bytes[p..]) else { return Err(FastError::Unsupported); };
-            p+=off;
-            if memchr::memchr(b'<',&bytes[value_start..p]).is_some() {
-                return Err(FastError::Product(Error::new("XML","Literal '<' in an attribute")));
+            p+=1; let value_start=p; let mut special=false;
+            loop {
+                let Some(&byte)=bytes.get(p) else { return Err(FastError::Unsupported); };
+                if byte==quote { break; }
+                if byte==b'<' { return Err(FastError::Product(Error::new("XML","Literal '<' in an attribute"))); }
+                special|=matches!(byte,b'&'|b'\r'|b'\n'|b'\t');
+                p+=1;
             }
-            b.attribute(aprefix,alocal,value_start..p)?;
+            b.attribute_known(aprefix,alocal,value_start..p,special)?;
             p+=1;
         }
     }

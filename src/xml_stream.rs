@@ -129,9 +129,13 @@ impl<'a> Builder<'a> {
         Ok(())
     }
     fn attribute(&mut self, prefix: &'a str, local: &'a str, value: Range<usize>) -> Result<()> {
+        let raw: &'a str = &self.source[value.clone()];
+        self.attribute_known(prefix,local,value,attribute_special(raw.as_bytes()).is_some())
+    }
+    fn attribute_known(&mut self, prefix: &'a str, local: &'a str, value: Range<usize>, special:bool) -> Result<()> {
         require(self.pending.is_some(), "XML", "Attribute outside a start tag")?;
         let raw: &'a str = &self.source[value.clone()];
-        let decoded = if attribute_special(raw.as_bytes()).is_some() {
+        let decoded = if special {
             let span=if let Some(span)=self.decoded_cache.get(raw) {*span} else {
                 let pool=&mut self.result.normalized;
                 let begin=pool.text.len(); decode_attribute(raw,&mut pool.text)?;
