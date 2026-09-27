@@ -274,7 +274,7 @@ impl Workbook {
         }
         for &n in &xml.semantic.shelves {
             let Some(sheet)=xml.ancestor(n,"worksheet") else {continue;};
-            if xml.node(n).first_child.is_none() {
+            if xml.node(n).first_child().is_none() {
                 if let Ok(a)=formula::analyze(xml.text_content(n)?) {
                     for r in a.references {
                         if let Some(ds)=r.datasource {

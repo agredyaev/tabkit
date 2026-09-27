@@ -91,15 +91,15 @@ impl<'a> Builder<'a> {
         if let Some(f) = self.stack.last_mut() {
             if f.leaf { self.result.leaf_text.truncate(f.text_begin); f.leaf = false; }
             f.last_text = false;
-            if let Some(last) = f.last_element { self.result.nodes[last.0 as usize].next_sibling = Some(id); }
-            else { self.result.nodes[f.id.0 as usize].first_child = Some(id); }
+            if let Some(last) = f.last_element { self.result.nodes[last.0 as usize].next_sibling=id.0; }
+            else { self.result.nodes[f.id.0 as usize].first_child=id.0; }
             f.last_element = Some(id);
         }
         let normalized = self.result.normalized.source_starts.len();
-        self.result.nodes.push(Node { parent, first_child: None, next_sibling: None,
-            name: TextId(0), span: Span::new(span.clone())?,
-            attributes: self.attribute_count..self.attribute_count, leaf_text: None,
-            raw_attributes: Span::new(span.end..span.end)?, normalized: normalized..normalized });
+        self.result.nodes.push(Node { parent:Node::link(parent), first_child:NONE_ID, next_sibling:NONE_ID,
+            name:TextId(0), span:Span::new(span.clone())?,
+            attributes:IndexRange::empty(self.attribute_count), leaf_text:NONE_ID,
+            raw_attributes:Span::new(span.end..span.end)?, normalized:IndexRange::empty(normalized) });
         self.result.worksheet_owners.push(sheet); self.result.dependency_owners.push(dependency);
         self.attrs.clear();
         self.pending = Some(Frame { id, prefix, local, ns_mark: self.undo.len(),
@@ -211,9 +211,9 @@ impl<'a> Builder<'a> {
             }
         }
         let n = &mut self.result.nodes[f.id.0 as usize];
-        n.name = name; n.attributes.end = self.attribute_count;
+        n.name = name; n.attributes.end=self.attribute_count as u32;
         n.raw_attributes.end = span.start as u32;
-        n.normalized.end = self.result.normalized.source_starts.len();
+        n.normalized.end=self.result.normalized.source_starts.len() as u32;
         if ns == 0 && f.local == "worksheet" { f.sheet = Some(f.id); }
         if ns == 0 && f.local == "datasource-dependencies" { f.dependency = Some(f.id); }
         if end == ElementEnd::Empty { self.finish(f, span.end)?; }
@@ -223,7 +223,7 @@ impl<'a> Builder<'a> {
     fn finish(&mut self, f: Frame<'a>, end: usize) -> Result<()> {
         let n = &mut self.result.nodes[f.id.0 as usize]; n.span.end = end as u32;
         if f.leaf && self.result.leaf_text.len() > f.text_begin {
-            n.leaf_text = Some(LeafTextId(self.result.leaf_texts.len() as u32));
+            n.leaf_text=self.result.leaf_texts.len() as u32;
             self.result.leaf_texts.push(Span::new(f.text_begin..self.result.leaf_text.len())?);
         }
         self.rollback_namespaces(f.ns_mark);

@@ -1,15 +1,14 @@
 //! Borrowed iteration over an already checked start tag. No XML admission occurs here.
-use super::{Attribute, Span, Xml, whitespace};
-use std::ops::Range;
+use super::{Attribute, IndexRange, Span, Xml, whitespace};
 pub struct Attributes<'a> {
     xml: &'a Xml,
     front: usize,
     back: usize,
     remaining: usize,
-    normalized: Range<usize>,
+    normalized: IndexRange,
 }
 impl<'a> Attributes<'a> {
-    pub(super) fn new(xml: &'a Xml, span: Span, len: usize, normalized: Range<usize>) -> Self {
+    pub(super) fn new(xml: &'a Xml, span: Span, len: usize, normalized: IndexRange) -> Self {
         Self { xml, front: span.start as usize, back: span.end as usize, remaining: len, normalized }
     }
     pub(super) fn next_spans(&mut self) -> Option<(Span, Span, u8)> {

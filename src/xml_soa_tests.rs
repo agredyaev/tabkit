@@ -12,7 +12,7 @@ fn check_columns(xml: &Xml) {
         for a in xml.attributes(NodeId(i as u32)) {
             let begin = a.name.as_ptr() as usize - xml.text.as_ptr() as usize;
             assert_eq!(&xml.text[begin..begin+a.name.len()], a.name);
-            let expected = xml.attribute_value(a.span, node.normalized.clone());
+            let expected = xml.attribute_value(a.span, node.normalized);
             assert_eq!(a.value.as_ptr(), expected.as_ptr());
             assert_eq!(xml.text.as_bytes()[a.span.start as usize-1], a.quote);
             assert_eq!(xml.text.as_bytes()[a.span.end as usize], a.quote);

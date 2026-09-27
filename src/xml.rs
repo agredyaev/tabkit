@@ -44,18 +44,37 @@ pub struct Names { strings: Vec<String> }
 impl Names {
     fn get(&self, id: TextId) -> &str { &self.strings[id.0 as usize] }
 }
+const NONE_ID:u32=u32::MAX;
 #[derive(Clone, Copy)]
 struct LeafTextId(u32);
+#[derive(Clone, Copy)]
+struct IndexRange { start:u32, end:u32 }
+impl IndexRange {
+    fn empty(at:usize)->Self { let at=at as u32; Self{start:at,end:at} }
+    fn len(self)->usize { (self.end-self.start) as usize }
+    fn is_empty(self)->bool { self.start==self.end }
+    fn range(self)->Range<usize> { self.start as usize..self.end as usize }
+}
 pub struct Node {
-    pub parent: Option<NodeId>,
-    pub first_child: Option<NodeId>,
-    pub next_sibling: Option<NodeId>,
-    pub name: TextId,
-    pub span: Span,
-    pub attributes: Range<usize>,
-    leaf_text: Option<LeafTextId>,
-    raw_attributes: Span,
-    normalized: Range<usize>,
+    parent:u32,
+    first_child:u32,
+    next_sibling:u32,
+    pub name:TextId,
+    pub span:Span,
+    attributes:IndexRange,
+    leaf_text:u32,
+    raw_attributes:Span,
+    normalized:IndexRange,
+}
+impl Node {
+    fn link(id:Option<NodeId>)->u32 { id.map(|v|v.0).unwrap_or(NONE_ID) }
+    fn unlink(id:u32)->Option<NodeId> { (id!=NONE_ID).then_some(NodeId(id)) }
+    pub fn parent(&self)->Option<NodeId> { Self::unlink(self.parent) }
+    pub fn first_child(&self)->Option<NodeId> { Self::unlink(self.first_child) }
+    pub fn next_sibling(&self)->Option<NodeId> { Self::unlink(self.next_sibling) }
+    pub fn attributes_empty(&self)->bool { self.attributes.is_empty() }
+    #[allow(dead_code)]
+    pub fn attribute_index_range(&self)->Range<usize> { self.attributes.range() }
 }
 /// A borrowed view of one row; it owns no text and is never stored per attribute.
 #[derive(Clone, Copy)]
@@ -96,6 +115,7 @@ pub struct Xml {
     pub sha256: String,
 }
 impl Xml {
+    fn leaf_id(id:u32)->Option<LeafTextId> { (id!=NONE_ID).then_some(LeafTextId(id)) }
     pub fn into_text(self) -> String { self.text }
     pub fn parse(bytes: Vec<u8>, limits: &Limits) -> Result<Self> {
         stream::parse(bytes, limits)
@@ -109,16 +129,16 @@ impl Xml {
     pub fn tag(&self, id: NodeId) -> &str {
         self.names.get(self.node(id).name)
     }
-    fn attribute_value(&self, value: Span, normalized: Range<usize>) -> &str {
-        let starts = &self.normalized.source_starts[normalized.clone()];
+    fn attribute_value(&self, value: Span, normalized: IndexRange) -> &str {
+        let starts = &self.normalized.source_starts[normalized.range()];
         match starts.binary_search(&value.start) {
-            Ok(i) => &self.normalized.text[self.normalized.spans[normalized.start+i].range()],
+            Ok(i) => &self.normalized.text[self.normalized.spans[normalized.start as usize+i].range()],
             Err(_) => &self.text[value.range()],
         }
     }
     pub fn attributes(&self, id: NodeId) -> attrs::Attributes<'_> {
         let node = self.node(id);
-        attrs::Attributes::new(self, node.raw_attributes, node.attributes.len(), node.normalized.clone())
+        attrs::Attributes::new(self, node.raw_attributes, node.attributes.len(), node.normalized)
     }
     pub fn attr(&self, id: NodeId, name: &str) -> Option<Attribute<'_>> {
         // Scan only this admitted start tag; decode metadata only for the match.
@@ -126,7 +146,7 @@ impl Xml {
         while let Some((key, value, quote)) = it.next_spans() {
             if self.text[key.range()] == *name {
                 return Some(Attribute { name: &self.text[key.range()],
-                    value: self.attribute_value(value, self.node(id).normalized.clone()), span: value, quote });
+                    value: self.attribute_value(value, self.node(id).normalized), span: value, quote });
             }
         }
         None
@@ -140,7 +160,7 @@ impl Xml {
     pub fn children(&self, id: NodeId) -> Children<'_> {
         Children {
             xml: self,
-            next: self.node(id).first_child
+            next: self.node(id).first_child()
         }
     }
     pub fn named_children<'a>(&'a self, id: NodeId, tag: &'a str) -> impl Iterator<Item=NodeId> + 'a {
@@ -155,19 +175,19 @@ impl Xml {
     pub fn ancestor(&self, id: NodeId, tag: &str) -> Option<NodeId> {
         if tag == "worksheet" { return self.worksheet_owners[id.0 as usize]; }
         if tag == "datasource-dependencies" { return self.dependency_owners[id.0 as usize]; }
-        let mut p = self.node(id).parent;
+        let mut p = self.node(id).parent();
         while let Some(n) = p {
             if self.tag(n) == tag {
                 return Some(n);
             }
-            p = self.node(n).parent;
+            p = self.node(n).parent();
         }
         None
     }
     pub fn text_content(&self, id: NodeId) -> Result<&str> {
-        require(self.node(id).first_child.is_none(), "UNSUPPORTED_SHAPE",
+        require(self.node(id).first_child().is_none(), "UNSUPPORTED_SHAPE",
             "Expected a leaf element, not mixed or nested content")?;
-        Ok(self.node(id).leaf_text.map(|i| &self.leaf_text[self.leaf_texts[i.0 as usize].range()]).unwrap_or(""))
+        Ok(Self::leaf_id(self.node(id).leaf_text).map(|i| &self.leaf_text[self.leaf_texts[i.0 as usize].range()]).unwrap_or(""))
     }
 
 }
@@ -179,7 +199,7 @@ impl Iterator for Children<'_> {
     type Item = NodeId;
     fn next(&mut self) -> Option<NodeId> {
         let id = self.next?;
-        self.next = self.xml.node(id).next_sibling;
+        self.next = self.xml.node(id).next_sibling();
         Some(id)
     }
 }

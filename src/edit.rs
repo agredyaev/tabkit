@@ -281,7 +281,7 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
                 }.accepts(min, dtype)?;
                 for (tag, value) in [("min",min),("max",max)] {
                     let n = book.xml.one_child(filter.node, tag)?;
-                    require(book.xml.children(n).next().is_none() && book.xml.node(n).attributes.is_empty(), "UNSUPPORTED_SHAPE", "Range bounds must be plain text elements")?;
+                    require(book.xml.children(n).next().is_none() && book.xml.node(n).attributes_empty(), "UNSUPPORTED_SHAPE", "Range bounds must be plain text elements")?;
                     let literal = escape_text(&value.literal(dtype)?)?;
                     if Scalar::parse(dtype, &book.xml.text_content(n)?)? != *value {
                         replace_node(book, n, format!("<{tag}>{literal}</{tag}>"), "range bound", &mut patches);
@@ -412,7 +412,7 @@ fn set_domain(book: &Workbook, column: NodeId, dtype: &str, domain: &Domain, pat
         }
         => {
             let m = book.xml.one_child(column,"members")?;
-            require(book.xml.node(m).attributes.is_empty(),"UNSUPPORTED_SHAPE","Unknown members-container metadata")?;
+            require(book.xml.node(m).attributes_empty(),"UNSUPPORTED_SHAPE","Unknown members-container metadata")?;
             let mut old = BTreeMap::new();
             for member in book.xml.children(m) {
                 require(book.xml.tag(member)=="member" && book.xml.children(member).next().is_none(),"UNSUPPORTED_SHAPE","Unknown list member structure")?;

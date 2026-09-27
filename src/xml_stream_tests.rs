@@ -50,8 +50,8 @@ fn iterator_supports_interleaved_front_and_back_without_allocation_or_copy() {
 fn streamed_context_matches_generic_ancestor_walk() {
     let x = parsed("<a><worksheet><table><datasource-dependencies><column/><x/></datasource-dependencies></table></worksheet><n:worksheet xmlns:n='urn:x'><column/></n:worksheet></a>");
     for i in 0..x.nodes.len() { for tag in ["worksheet", "datasource-dependencies"] {
-        let mut parent = x.node(NodeId(i as u32)).parent; let mut expected = None;
-        while let Some(n) = parent { if x.tag(n) == tag { expected = Some(n); break; } parent = x.node(n).parent; }
+        let mut parent = x.node(NodeId(i as u32)).parent(); let mut expected = None;
+        while let Some(n) = parent { if x.tag(n) == tag { expected = Some(n); break; } parent = x.node(n).parent(); }
         assert_eq!(x.ancestor(NodeId(i as u32), tag), expected);
     }}
 }

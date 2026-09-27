@@ -9,7 +9,7 @@ fn compare(source:&str) {
         let id=NodeId(i as u32);let actual=indexed.node(id);
         let position=|node:roxmltree::Node<'_, '_>|elements.iter().position(|e|*e==node).map(|v|NodeId(v as u32));
         assert_eq!(actual.span.range(),n.range());
-        assert_eq!(actual.parent,n.parent().and_then(position));
+        assert_eq!(actual.parent(),n.parent().and_then(position));
         assert_eq!(indexed.children(id).collect::<Vec<_>>(),n.children().filter(|c|c.is_element()).map(|c|position(c).unwrap()).collect::<Vec<_>>());
         let tag=n.tag_name();let expected=tag.namespace().map(|ns|format!("{{{ns}}}{}",tag.name())).unwrap_or_else(||tag.name().into());
         assert_eq!(indexed.tag(id),expected);

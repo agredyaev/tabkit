@@ -22,8 +22,8 @@ fuzz_target!(|data:&[u8]|{
                 let value=n.attributes().find(|b|b.name()==local&&b.namespace()==ns).unwrap().value();
                 assert_eq!(a.value,value);
             }
-            for c in xml.children(id){assert_eq!(xml.node(c).parent,Some(id));}
-            if node.first_child.is_none(){let value:String=n.children().filter(|c|c.is_text()).filter_map(|c|c.text()).collect();assert_eq!(xml.text_content(id).unwrap(),value);}
+            for c in xml.children(id){assert_eq!(xml.node(c).parent(),Some(id));}
+            if node.first_child().is_none(){let value:String=n.children().filter(|c|c.is_text()).filter_map(|c|c.text()).collect();assert_eq!(xml.text_content(id).unwrap(),value);}
         }
         assert!(elements.next().is_none());
         drop(oracle);
