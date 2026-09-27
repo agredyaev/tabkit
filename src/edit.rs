@@ -100,7 +100,7 @@ pub struct Plan {
 /// Compact comparison authority retained after the original index is released.
 struct Prepared {
     changes: ChangeSet,
-    before: BTreeMap<String, Value>,
+    before_changed: BTreeMap<String, Value>,
     expected: BTreeMap<String, Value>,
     patches: Vec<Patch>,
     warnings: Vec<String>,
@@ -110,17 +110,19 @@ struct Prepared {
 /// Borrowed convenience path for callers that intentionally retain the source.
 #[allow(dead_code)]
 pub fn plan(input: &str, package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Config) -> Result<(Plan, Workbook)> {
+    let before = book.snapshot()?;
     let prepared = prepare(package_sha256, book, changes, cfg)?;
     let candidate = emit_candidate(&book.xml.text, &prepared, cfg)?;
-    complete(input, prepared, candidate, cfg)
+    complete(input, before, prepared, candidate, cfg)
 }
 /// Product path: preserve independently, then release the source before candidate admission.
 pub fn plan_owned(input: &str, package_sha256: &str, book: Workbook, changes: ChangeSet, cfg: &Config) -> Result<(Plan, Workbook)> {
+    let before = book.snapshot()?;
     let prepared = prepare(package_sha256, &book, changes, cfg)?;
     let source = book.into_xml().into_text();
     let candidate = emit_candidate(&source, &prepared, cfg)?;
     drop(source);
-    complete(input, prepared, candidate, cfg)
+    complete(input, before, prepared, candidate, cfg)
 }
 /// Product path: candidate semantics are proven from the admitted source plus bounded typed patches.
 pub fn plan_product_owned(input: &str, package_sha256: &str, book: Workbook,
@@ -137,7 +139,7 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
     require(changes.input_sha256 == package_sha256, "STALE_BASE", "Input artifact hash differs from the inspected snapshot")?;
     require(!changes.operations.is_empty() && changes.operations.len() <= cfg.limits.max_operations, "LIMIT", "Changeset operation count is invalid")?;
     book.require_2025()?;
-    let before = book.snapshot()?;
+    let mut before_changed = BTreeMap::new();
     let mut expected = BTreeMap::new(); // Sparse requested changes, not a second full snapshot.
     let mut patches = Vec::new();
     let mut warnings = Vec::new();
@@ -195,7 +197,9 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
                     set_attr(book, calc, "formula", new, "calculation formula and dependency copies", &mut patches)?;
                 }
                 require(!field.copies.is_empty(), "UNSUPPORTED_SHAPE", "No editable definition")?;
-                expected.insert(format!("field/{field_id}/formula"), json!(new));
+                let property=format!("field/{field_id}/formula");
+                before_changed.insert(property.clone(),json!(expected_formula));
+                expected.insert(property, json!(new));
             }
             Operation::SetParameter {
                 field_id,
@@ -230,7 +234,12 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
                         set_domain(book, column, &field.datatype, new_domain, &mut patches)?;
                     }
                 }
-                expected.insert(format!("field/{field_id}/parameter"), json!({
+                let property=format!("field/{field_id}/parameter");
+                before_changed.insert(property.clone(),json!({
+                    "current":old_value,
+                    "domain":old_domain
+                }));
+                expected.insert(property, json!({
                     "current":new_value,
                     "domain":new_domain
                 }));
@@ -260,7 +269,9 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
                     let replacement = categorical_fragment(book, group, &level, values)?;
                     replace_node(book, group, replacement, "categorical values", &mut patches);
                 }
-                expected.insert(format!("filter/{filter_id}/state"), new);
+                let property=format!("filter/{filter_id}/state");
+                before_changed.insert(property.clone(),old);
+                expected.insert(property, new);
             }
             Operation::SetFilterRange {
                 filter_id,
@@ -287,7 +298,9 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
                         replace_node(book, n, format!("<{tag}>{literal}</{tag}>"), "range bound", &mut patches);
                     }
                 }
-                expected.insert(format!("filter/{filter_id}/state"), json!({
+                let property=format!("filter/{filter_id}/state");
+                before_changed.insert(property.clone(),old);
+                expected.insert(property, json!({
                     "kind":"range",
                     "min":min,
                     "max":max
@@ -298,7 +311,7 @@ fn prepare(package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Conf
     patches.sort_by_key(|p| (p.span.start,p.span.end));
     book.validate_calculation_overrides(&formula_overrides)?;
 
-    Ok(Prepared { changes, before, expected, patches, warnings,
+    Ok(Prepared { changes, before_changed, expected, patches, warnings,
         twb_sha256: book.xml.sha256.clone(), before_checks: crate::validation::local(book) })
 }
 fn emit_candidate(source: &str, p: &Prepared, cfg: &Config) -> Result<(String,String)> {
@@ -307,10 +320,10 @@ fn emit_candidate(source: &str, p: &Prepared, cfg: &Config) -> Result<(String,St
     Ok((candidate,sha256))
 }
 fn complete_prechecked(input:&str,p:Prepared,candidate_sha256:&str)->Result<Plan>{
-    let Prepared{changes,before,expected,patches,mut warnings,twb_sha256,before_checks:_}=p;
+    let Prepared{changes,before_changed,expected,patches,mut warnings,twb_sha256,before_checks:_}=p;
     let mut delta=Vec::with_capacity(expected.len());
     for (key,new) in &expected {
-        let old=before.get(key).ok_or_else(||Error::new("INTERNAL","Expected semantic key is absent from admitted source"))?;
+        let old=before_changed.get(key).ok_or_else(||Error::new("INTERNAL","Expected semantic key is absent from admitted source"))?;
         if old!=new {
             delta.push(Delta{object:key.clone(),property:"value".into(),before:old.clone(),after:new.clone()});
         }
@@ -320,8 +333,8 @@ fn complete_prechecked(input:&str,p:Prepared,candidate_sha256:&str)->Result<Plan
         changes,twb_sha256,candidate_twb_sha256:candidate_sha256.into(),patches,delta,warnings,
         tableau_semantics:"not_run".into()})
 }
-fn complete(input: &str, p: Prepared, candidate: (String,String), cfg: &Config) -> Result<(Plan, Workbook)> {
-    let Prepared { changes, before, expected, patches, mut warnings, twb_sha256, before_checks } = p;
+fn complete(input: &str, before: BTreeMap<String,Value>, p: Prepared, candidate: (String,String), cfg: &Config) -> Result<(Plan, Workbook)> {
+    let Prepared { changes, before_changed:_, expected, patches, mut warnings, twb_sha256, before_checks } = p;
     let (candidate,candidate_sha256)=candidate;
     let after = Workbook::parse_with_sha256(candidate.into_bytes(), &cfg.limits, candidate_sha256)?;
     after.require_acyclic()?;
