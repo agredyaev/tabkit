@@ -60,14 +60,17 @@ impl Package {
     pub fn open(path: &Path, limits: &Limits) -> Result<(Self, Xml)> {
         let size = std::fs::metadata(path)?.len();
         require(size <= limits.file_bytes, "LIMIT", "Workbook package is too large")?;
-        let sha = hash_file(path, limits.file_bytes)?;
-        match path.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase()).as_deref() {
+        let extension=path.extension().and_then(|e|e.to_str()).map(|s|s.to_ascii_lowercase());
+        match extension.as_deref() {
             Some("twb") => {
                 let twb = crate::fs::read_bounded(path, limits.xml_bytes)?;
                 let parsed=Xml::parse(twb, limits)?;
                 require(parsed.tag(crate::xml::NodeId(0))=="workbook","FORMAT","Package XML root is not a workbook")?;
+                // For a plain TWB the package bytes are exactly the admitted XML bytes.
+                // Reuse that stable digest; the independent post-read file hash remains the freshness check.
+                let sha=parsed.sha256.clone();
                 require(hash_file(path, limits.file_bytes)? == sha, "STALE_BASE", "Input changed while reading")?;
-                let twb_sha256 = parsed.sha256.clone();
+                let twb_sha256 = sha.clone();
                 Ok((Self {
                     path: path.into(),
                     kind: Kind::Twb,
@@ -78,6 +81,7 @@ impl Package {
                 }, parsed))
             }
             Some("twbx") => {
+                let sha=hash_file(path,limits.file_bytes)?;
                 let mut archive = ZipArchive::new(File::open(path)?)?;
                 require(archive.len() <= limits.zip_entries, "ZIP_LIMIT", "Too many archive entries")?;
                 let mut names = BTreeSet::new();

@@ -322,6 +322,15 @@ fn package_entry_and_expanded_size_limits_reject_without_output(){
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(),1);
 }
 #[test]
+fn plain_twb_package_and_xml_share_the_exact_admitted_digest(){
+    let (dir,_)=setup(GOOD);let limits=Limits::default();
+    let (pkg,xml)=Package::open(&dir.path().join("in.twb"),&limits).unwrap();
+    let expected=fs::sha256(GOOD.as_bytes());
+    assert_eq!(pkg.sha256,expected);
+    assert_eq!(pkg.twb_sha256,expected);
+    assert_eq!(xml.sha256,expected);
+}
+#[test]
 fn candidate_extension_must_match_original_package_kind(){
     let (dir,_)=setup(GOOD);let limits=Limits::default();
     let (pkg,xml)=Package::open(&dir.path().join("in.twb"),&limits).unwrap();
