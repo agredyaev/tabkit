@@ -235,7 +235,7 @@ impl Workbook {
             let mut ordered_index=0usize;
             let mut ordered=true;
             for n in xml.named_children(scope, "column") {
-                let name = xml.value(n, "name");
+                let name = xml.name_value(n);
                 let fid = ds.and_then(|d| {
                     let name=name?;
                     if ordered {

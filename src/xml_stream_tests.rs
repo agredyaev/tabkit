@@ -229,6 +229,18 @@ fn common_attribute_duplicate_fast_path_preserves_expanded_name_rules() {
 }
 
 #[test]
+fn name_value_fast_path_matches_generic_lookup_and_fallback() {
+    let limits=Limits::default();
+    let xml=Xml::parse(b"<workbook><column name='A&amp;B' role='measure'/><column role='measure' name='second'/><column namespace='x' name='third'/></workbook>".to_vec(),&limits).unwrap();
+    for id in [NodeId(1),NodeId(2),NodeId(3)] {
+        assert_eq!(xml.name_value(id),xml.value(id,"name"));
+    }
+    assert_eq!(xml.name_value(NodeId(1)),Some("A&B"));
+    assert_eq!(xml.name_value(NodeId(2)),Some("second"));
+    assert_eq!(xml.name_value(NodeId(3)),Some("third"));
+}
+
+#[test]
 fn common_qname_fast_path_requires_exact_boundaries() {
     let source="<workbook><column/><columnx/><calculation/><calculationx/><n name='a' namex='b' type='c' typex='d' caption='e' captionx='f' datatype='g' datatypex='h' role='i' rolex='j'/></workbook>";
     let fast=super::stream::fast_for_test(source.as_bytes().to_vec(),&Limits::default())

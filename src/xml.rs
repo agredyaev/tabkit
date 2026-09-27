@@ -152,6 +152,28 @@ impl Xml {
     pub fn value(&self, id: NodeId, name: &str) -> Option<&str> {
         self.attr(id, name).map(|a| a.value)
     }
+    pub(crate) fn name_value(&self, id: NodeId) -> Option<&str> {
+        let node=self.node(id);
+        let bytes=self.text.as_bytes();
+        let mut p=node.raw_attributes.start as usize;
+        let end=node.raw_attributes.end as usize;
+        while p<end && whitespace(bytes[p]) { p+=1; }
+        if bytes.get(p..p+4)!=Some(b"name") { return self.value(id,"name"); }
+        p+=4;
+        if p<end && !whitespace(bytes[p]) && bytes[p]!=b'=' { return self.value(id,"name"); }
+        while p<end && whitespace(bytes[p]) { p+=1; }
+        if bytes.get(p)!=Some(&b'=') { return self.value(id,"name"); }
+        p+=1;
+        while p<end && whitespace(bytes[p]) { p+=1; }
+        let quote=*bytes.get(p)?;
+        if !matches!(quote,b'\''|b'"') { return self.value(id,"name"); }
+        p+=1;
+        let begin=p;
+        while p<end && bytes[p]!=quote { p+=1; }
+        if p>=end { return self.value(id,"name"); }
+        let span=Span { start:begin as u32, end:p as u32 };
+        Some(self.attribute_value(span,node.normalized))
+    }
     pub fn required(&self, id: NodeId, name: &str) -> Result<&str> {
         self.value(id, name).ok_or_else(|| Error::new("UNSUPPORTED_SHAPE", format!("{} lacks {name}", self.tag(id))))
     }
