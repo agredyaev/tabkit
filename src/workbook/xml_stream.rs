@@ -253,14 +253,18 @@ impl<'a> Builder<'a> {
             let id=self.intern_tag(key);
             self.last_tag=Some((ns,f.local,id)); id
         };
+        let workbook_sheet = f.local == "worksheet" && self.stack.len() == 2
+            && self.stack[0].local == "workbook" && self.stack[1].local == "worksheets";
+        let workbook_dashboard = f.local == "dashboard" && self.stack.len() == 2
+            && self.stack[0].local == "workbook" && self.stack[1].local == "dashboards";
         if ns==0 {
             let semantic=&mut self.result.semantic;
             match f.local {
                 "datasource-dependencies"=>semantic.datasource_dependencies.push(f.id),
                 "column-instance"=>semantic.column_instances.push(f.id),
                 "rows"|"cols"=>semantic.shelves.push(f.id),
-                "worksheet"=>semantic.worksheets.push(f.id),
-                "dashboard"=>semantic.dashboards.push(f.id),
+                "worksheet" if workbook_sheet=>semantic.worksheets.push(f.id),
+                "dashboard" if workbook_dashboard=>semantic.dashboards.push(f.id),
                 "filter"=>semantic.filters.push(f.id),
                 "metadata-record"=>semantic.metadata_records.push(f.id),
                 _=>{}

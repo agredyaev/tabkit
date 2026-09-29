@@ -93,6 +93,34 @@ fn inspection_pagination_reassembles_all_sections_without_losing_ids() {
     }
 }
 #[test]
+fn datasource_inspection_reports_both_sql_kinds_without_connection_secrets() {
+    let (dir, app) = setup();
+    let source=GOOD.replace("<datasource name='ds_orders' caption='Orders'>", "\
+        <datasource name='ds_orders' caption='Orders'>\
+        <connection class='federated'>\
+          <named-connections><named-connection name='postgres.1' caption='Warehouse'>\
+            <connection class='postgres' server='db.example' dbname='analytics' schema='public' password='secret' one-time-sql='SET app.tenant = &apos;west&apos;;' />\
+          </named-connection></named-connections>\
+          <relation name='Orders SQL' connection='postgres.1' type='text'>SELECT * FROM orders WHERE amount &lt; 10</relation>\
+        </connection>\
+        <object-graph>\
+          <relation name='Orders SQL' connection='postgres.1' type='text'>SELECT * FROM orders WHERE amount &lt; 10</relation>\
+          <_.fcp.ObjectModelEncapsulateLegacy.false...relation name='Returns SQL' connection='postgres.1' type='text'>SELECT * FROM returns</_.fcp.ObjectModelEncapsulateLegacy.false...relation>\
+        </object-graph>");
+    std::fs::write(dir.path().join("in.twb"),source).unwrap();
+    let report=call(&app,"workbook_inspect",json!({"input":"in.twb","section":"datasources"})).unwrap();
+    let ds=&report["items"][0];
+    assert_eq!(ds["id"],0);
+    assert_eq!(ds["connections"][1]["name"],"postgres.1");
+    assert_eq!(ds["connections"][1]["class"],"postgres");
+    assert_eq!(ds["connections"][1]["initial_sql"],"SET app.tenant = 'west';");
+    assert_eq!(ds["custom_sql"],json!([
+        {"name":"Orders SQL","connection":"postgres.1","sql":"SELECT * FROM orders WHERE amount < 10","scope":"source"},
+        {"name":"Returns SQL","connection":"postgres.1","sql":"SELECT * FROM returns","scope":"source"}
+    ]));
+    assert!(!ds.to_string().contains("secret"));
+}
+#[test]
 fn stale_or_future_suite_is_rejected_before_any_assertion_is_evaluated() {
     let (dir, app) = setup();
     for (version, hash, expected) in [(2,fs::sha256(GOOD.as_bytes()),"SCHEMA_VERSION"),(1,"different".into(),"STALE_BASE")] {

@@ -154,27 +154,24 @@ pub fn query(cfg:&Config,ws:&Workspace,a:&Request,ct:&CancellationToken)->Result
 }
 #[cfg(any(feature = "hyper", test))]
 fn operation_query(operation:&Operation,max_rows:usize)->Result<sql::ReadQuery>{
-    let literal=|s:&str|->Result<String>{
-        require(!s.contains('\0')&&s.len()<=512,"SQL_POLICY","Invalid metadata selector")?;
-        Ok(format!("'{}'",s.replace('\'',"''")))
-    };
     let relation=|s:&str,
     t:&str|->Result<String>{
         Ok(format!("{}.{}",sql::identifier(s)?,sql::identifier(t)?))
     };
     match operation{
         Operation::Tables=>Ok(sql::ReadQuery{
-            sql:format!("SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE table_type='BASE TABLE' AND table_schema NOT IN ('pg_catalog','information_schema') ORDER BY table_schema,table_name LIMIT {}",max_rows+1),
+            sql:String::new(),
             tables:Vec::new()
         }),
         Operation::Columns{
             schema,
             table
         }
-        =>Ok(sql::ReadQuery{
-            sql:format!("SELECT column_name,data_type,is_nullable,ordinal_position FROM information_schema.columns WHERE table_schema={} AND table_name={} ORDER BY ordinal_position LIMIT {}",literal(schema)?,literal(table)?,max_rows+1),
-            tables:Vec::new()
-        }),
+        =>{
+            require(!schema.is_empty()&&!table.is_empty()&&schema.len()<=512&&table.len()<=512
+                &&!schema.contains('\0')&&!table.contains('\0'),"SQL_POLICY","Invalid metadata selector")?;
+            Ok(sql::ReadQuery{sql:String::new(),tables:Vec::new()})
+        },
         Operation::Query{
             sql:s
         }
@@ -229,7 +226,8 @@ fn native(w:&Worker,q:&sql::ReadQuery)->Result<Vec<u8>>{
     };
     unsafe extern "C"{
         fn tabkit_hyper_query(runtime:*const c_char,memory:*const c_char,snapshot:*const c_char,sql:*const c_char,
-        schemas:*const *const c_char,tables:*const *const c_char,count:usize,rows:usize,bytes:usize)->*mut c_char;
+            mode:i32,selector_schema:*const c_char,selector_table:*const c_char,
+            schemas:*const *const c_char,tables:*const *const c_char,count:usize,rows:usize,bytes:usize)->*mut c_char;
         fn tabkit_hyper_free(p:*mut c_char);
     }
     let c=|s:&str|CString::new(s).map_err(|_|Error::new("HYPER_ARGUMENT","NUL in native argument"));
@@ -237,6 +235,13 @@ fn native(w:&Worker,q:&sql::ReadQuery)->Result<Vec<u8>>{
     let memory=c(&w.memory)?;
     let snapshot=c(&w.snapshot)?;
     let query=c(&q.sql)?;
+    let (mode,schema,table)=match &w.operation{
+        Operation::Tables=>(1,"",""),
+        Operation::Columns{schema,table}=>(2,schema.as_str(),table.as_str()),
+        _=>(0,"","")
+    };
+    let schema=c(schema)?;
+    let table=c(table)?;
     let schemas=q.tables.iter().map(|(s,_)|c(s)).collect::<Result<Vec<_>>>()?;
     let tables=q.tables.iter().map(|(_,t)|c(t)).collect::<Result<Vec<_>>>()?;
     let sp:Vec<_>=schemas.iter().map(|s|s.as_ptr()).collect();
@@ -245,7 +250,7 @@ fn native(w:&Worker,q:&sql::ReadQuery)->Result<Vec<u8>>{
     // every exception, returns a malloc-owned NUL-terminated buffer, and provides
     // the matching deallocator. No SDK object crosses the ABI.
     unsafe{
-        let p=tabkit_hyper_query(runtime.as_ptr(),memory.as_ptr(),snapshot.as_ptr(),query.as_ptr(),sp.as_ptr(),tp.as_ptr(),sp.len(),w.max_rows,w.max_bytes);
+        let p=tabkit_hyper_query(runtime.as_ptr(),memory.as_ptr(),snapshot.as_ptr(),query.as_ptr(),mode,schema.as_ptr(),table.as_ptr(),sp.as_ptr(),tp.as_ptr(),sp.len(),w.max_rows,w.max_bytes);
         require(!p.is_null(),"HYPER_NATIVE","Native allocation failed")?;
         let raw=CStr::from_ptr(p).to_bytes();
         if raw.len()>w.max_bytes {

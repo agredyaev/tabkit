@@ -1,5 +1,7 @@
 #[cfg(any(test, feature = "dev-tools"))]
 use crate::config::Limits;
+#[path = "lineage.rs"]
+pub mod lineage;
 use crate::{
     error::{
         Error,
@@ -768,6 +770,49 @@ impl Workbook {
                 "reason":e
             }),
         }
+    }
+    pub fn datasource_report(&self, i:usize)->Result<Value> {
+        let root=self.xml.one_child(NodeId(0),"datasources")?;
+        let ds=self.xml.named_children(root,"datasource").nth(i)
+            .ok_or_else(||Error::new("INTERNAL","Datasource XML node is missing"))?;
+        let mut connections=Vec::new();
+        let mut custom_sql=Vec::new();
+        let mut seen_sql=BTreeSet::new();
+        let mut queue=VecDeque::from([ds]);
+        while let Some(node)=queue.pop_front() {
+            match self.xml.tag(node) {
+                "connection" => {
+                    let parent=self.xml.node(node).parent()
+                        .filter(|&p|self.xml.tag(p)=="named-connection");
+                    connections.push(json!({
+                        "name":parent.and_then(|p|self.xml.value(p,"name")),
+                        "caption":parent.and_then(|p|self.xml.value(p,"caption")),
+                        "class":self.xml.value(node,"class"),
+                        "server":self.xml.value(node,"server"),
+                        "database":self.xml.value(node,"dbname"),
+                        "schema":self.xml.value(node,"schema"),
+                        "initial_sql":self.xml.value(node,"one-time-sql").filter(|s|!s.is_empty()),
+                        "scope":if self.xml.ancestor(node,"extract").is_some(){"extract"}else{"source"}
+                    }));
+                }
+                tag if (tag=="relation" || tag.ends_with("...relation"))
+                    && self.xml.value(node,"type")==Some("text") => {
+                    let sql=self.xml.text_content(node)?;
+                    let name=self.xml.value(node,"name");
+                    let connection=self.xml.value(node,"connection");
+                    let scope=if self.xml.ancestor(node,"extract").is_some(){"extract"}else{"source"};
+                    if seen_sql.insert((name,connection,sql,scope)) {
+                        custom_sql.push(json!({"name":name,"connection":connection,"sql":sql,"scope":scope}));
+                    }
+                }
+                _=>{}
+            }
+            queue.extend(self.xml.children(node));
+        }
+        let mut result=serde_json::to_value(&self.datasources[i])?;
+        result["connections"]=json!(connections);
+        result["custom_sql"]=json!(custom_sql);
+        Ok(result)
     }
     pub fn overview(&self)->Value {
         json!({

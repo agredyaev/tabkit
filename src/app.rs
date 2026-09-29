@@ -20,7 +20,7 @@ use crate::{
     },
     validation,
     wire,
-    workbook::Workbook
+    workbook::{Workbook, lineage::{Direction, Graph, ImpactCursor, NodeKind, NodeRef, SearchBy}}
 };
 use schemars::JsonSchema;
 use serde::{
@@ -33,6 +33,7 @@ use serde_json::{
     json
 };
 use std::{
+    collections::BTreeMap,
     io::Write,
     sync::Mutex,
     time::{
@@ -41,6 +42,7 @@ use std::{
     }
 };
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 #[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct Empty{
 }
 #[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct Input{
@@ -49,6 +51,42 @@ use tokio_util::sync::CancellationToken;
 #[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct Inspect {
     pub input:String,
     #[serde(default)]pub section:InspectSection,
+    #[serde(default)]pub offset:usize,
+    #[serde(default="page_limit")]pub limit:usize,
+}
+#[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct LineageFind {
+    pub snapshot_id:String,
+    pub prefix:String,
+    #[serde(default)]pub by:SearchBy,
+    pub kind:Option<NodeKind>,
+    #[serde(default)]pub offset:usize,
+    #[serde(default="page_limit")]pub limit:usize,
+}
+#[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct LineageNeighbors {
+    pub snapshot_id:String,
+    pub node:NodeRef,
+    pub direction:Direction,
+    #[serde(default)]pub offset:usize,
+    #[serde(default="page_limit")]pub limit:usize,
+}
+#[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct LineageDetails {
+    pub snapshot_id:String,
+    pub node:NodeRef,
+}
+#[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct LineageImpact {
+    pub snapshot_id:String,
+    pub from:Option<NodeRef>,
+    pub direction:Option<Direction>,
+    pub cursor:Option<String>,
+    #[serde(default="page_limit")]pub limit:usize,
+}
+#[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct LineageExport {
+    pub snapshot_id:Option<String>,
+    pub input:Option<String>,
+    pub output:String,
+}
+#[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct LineageGaps {
+    pub snapshot_id:String,
     #[serde(default)]pub offset:usize,
     #[serde(default="page_limit")]pub limit:usize,
 }
@@ -148,14 +186,17 @@ pub enum InspectSection{
 pub struct App{
     pub cfg:Config,
     pub ws:Workspace,
-    rest:Mutex<Option<Rest>>
+    rest:Mutex<Option<Rest>>,
+    lineage:Mutex<Option<LineageSession>>,
 }
+struct LineageSession { id:String, graph:Graph, impact:Option<ImpactCursor> }
 impl App{
     pub fn new(cfg:Config)->Result<Self>{
         Ok(Self{
             ws:Workspace::new(cfg.workspace.clone())?,
             cfg,
-            rest:Mutex::new(None)
+            rest:Mutex::new(None),
+            lineage:Mutex::new(None),
         })
     }
     fn remote<F>(&self,ct:&CancellationToken,f:F)->Result<Value> where F:FnOnce(&mut Rest)->Result<Value>{
@@ -291,6 +332,13 @@ impl App{
                 Ok(result)
             },
             "workbook_inspect"=>self.inspect(parse(args)?),
+            "workbook_lineage_open"=>self.lineage_open(parse(args)?),
+            "workbook_lineage_find"=>self.lineage_find(parse(args)?),
+            "workbook_lineage_neighbors"=>self.lineage_neighbors(parse(args)?),
+            "workbook_lineage_details"=>self.lineage_details(parse(args)?),
+            "workbook_lineage_impact"=>self.lineage_impact(parse(args)?),
+            "workbook_lineage_gaps"=>self.lineage_gaps(parse(args)?),
+            "workbook_lineage_export"=>self.lineage_export(parse(args)?),
             "workbook_validate"=>{
                 let a:Input=parse(args)?;
                 let(pkg,book)=self.load(&a.input)?;
@@ -384,6 +432,90 @@ impl App{
         }
         Err(Error::new("RESULT_LIMIT","Read-only report exceeds budget; request a narrower page or smaller result"))
     }
+    fn lineage_open(&self,a:Input)->Result<Value>{
+        let(pkg,book)=self.load(&a.input)?;
+        let graph=Graph::build(book,pkg.sha256.clone())?;
+        let id=Uuid::new_v4().to_string();
+        let (nodes,edges)=graph.count();
+        let mut gap_codes=BTreeMap::<&str,usize>::new();
+        for gap in &graph.gaps {*gap_codes.entry(&gap.code).or_default()+=1;}
+        let result=json!({"snapshot_id":id,"input_sha256":pkg.sha256,
+            "source_build":graph.source_build.as_deref().map(|s|s.chars().take(128).collect::<String>()),
+            "nodes":nodes,"edges":edges,"coverage":graph.coverage(),"gap_codes":gap_codes});
+        let mut slot=self.lineage.lock().map_err(|_|Error::new("INTERNAL","Lineage mutex is poisoned"))?;
+        *slot=Some(LineageSession{id,graph,impact:None});
+        Ok(result)
+    }
+    fn lineage_find(&self,a:LineageFind)->Result<Value>{
+        let slot=self.lineage.lock().map_err(|_|Error::new("INTERNAL","Lineage mutex is poisoned"))?;
+        let session=active_lineage(&slot,&a.snapshot_id)?;
+        let mut result=session.graph.find(&a.prefix,a.by,a.kind,a.offset,a.limit)?;
+        result["snapshot_id"]=json!(a.snapshot_id);
+        Ok(result)
+    }
+    fn lineage_neighbors(&self,a:LineageNeighbors)->Result<Value>{
+        let slot=self.lineage.lock().map_err(|_|Error::new("INTERNAL","Lineage mutex is poisoned"))?;
+        let session=active_lineage(&slot,&a.snapshot_id)?;
+        let mut result=session.graph.neighbors(a.node,a.direction,a.offset,a.limit)?;
+        result["snapshot_id"]=json!(a.snapshot_id);
+        Ok(result)
+    }
+    fn lineage_details(&self,a:LineageDetails)->Result<Value>{
+        let slot=self.lineage.lock().map_err(|_|Error::new("INTERNAL","Lineage mutex is poisoned"))?;
+        let session=active_lineage(&slot,&a.snapshot_id)?;
+        let mut result=session.graph.details(a.node)?;
+        result["snapshot_id"]=json!(a.snapshot_id);
+        Ok(result)
+    }
+    fn lineage_impact(&self,a:LineageImpact)->Result<Value>{
+        require((1..=100).contains(&a.limit),"LIMIT","Lineage page limit must be 1..100")?;
+        let mut slot=self.lineage.lock().map_err(|_|Error::new("INTERNAL","Lineage mutex is poisoned"))?;
+        let session=active_lineage_mut(&mut slot,&a.snapshot_id)?;
+        match (a.from,a.cursor) {
+            (Some(from),None)=>{
+                session.impact=Some(ImpactCursor::new(&session.graph,from,
+                    a.direction.unwrap_or(Direction::Downstream))?);
+            },
+            (None,Some(cursor))=>{
+                require(a.direction.is_none(),"INPUT","Direction belongs to the first impact page")?;
+                require(session.impact.as_ref().is_some_and(|c| c.id==cursor),"STALE_CURSOR",
+                    "Impact cursor is absent or has been replaced")?;
+            },
+            _=>return Err(Error::new("INPUT","Provide from or cursor, but not both")),
+        }
+        let cursor=session.impact.as_mut().ok_or_else(||Error::new("INTERNAL","Impact cursor absent"))?;
+        let mut result=cursor.page(&session.graph,a.limit)?;
+        if result["done"]==true { session.impact=None; }
+        result["snapshot_id"]=json!(a.snapshot_id);
+        Ok(result)
+    }
+    fn lineage_export(&self,a:LineageExport)->Result<Value>{
+        require(a.input.is_some() != a.snapshot_id.is_some(),"INPUT",
+            "Provide exactly one of input or snapshot_id")?;
+        if let Some(input)=a.input {
+            let(pkg,book)=self.load(&input)?;
+            let graph=Graph::build(book,pkg.sha256)?;
+            return self.write_lineage_export(&graph,&a.output);
+        }
+        let slot=self.lineage.lock().map_err(|_|Error::new("INTERNAL","Lineage mutex is poisoned"))?;
+        let session=active_lineage(&slot,a.snapshot_id.as_deref().unwrap_or(""))?;
+        self.write_lineage_export(&session.graph,&a.output)
+    }
+    fn lineage_gaps(&self,a:LineageGaps)->Result<Value>{
+        let slot=self.lineage.lock().map_err(|_|Error::new("INTERNAL","Lineage mutex is poisoned"))?;
+        let session=active_lineage(&slot,&a.snapshot_id)?;
+        let mut result=session.graph.gap_page(a.offset,a.limit)?;
+        result["snapshot_id"]=json!(a.snapshot_id);
+        Ok(result)
+    }
+    fn write_lineage_export(&self,graph:&Graph,output:&str)->Result<Value>{
+        let(path,sha256,bytes)=self.ws.write_new_stream(output,self.cfg.limits.file_bytes,
+            |writer|graph.export(writer))?;
+        let (nodes,edges)=graph.count();
+        Ok(json!({"output":path,"sha256":sha256,"bytes":bytes,
+            "input_sha256":graph.input_sha256,"nodes":nodes,"edges":edges,
+            "coverage":graph.coverage()}))
+    }
     fn inspect(&self,a:Inspect)->Result<Value>{
         require((1..=1000).contains(&a.limit),"LIMIT","Inspection limit must be 1..1000")?;
         let(pkg,book)=self.load(&a.input)?;
@@ -412,7 +544,7 @@ impl App{
             items.push(match a.section {
                 InspectSection::Fields|InspectSection::Calculations|InspectSection::Parameters=>book.field_report(selected_fields[i]),
                 InspectSection::Filters=>book.filter_report(i),
-                InspectSection::Datasources=>serde_json::to_value(&book.datasources[i])?,
+                InspectSection::Datasources=>book.datasource_report(i)?,
                 InspectSection::References=>serde_json::to_value(&book.edges[i])?,
                 InspectSection::Diagnostics=>serde_json::to_value(&book.diagnostics[i])?,
                 InspectSection::LocalDefinitions=>serde_json::to_value(&book.local_definitions[i])?,
@@ -594,6 +726,14 @@ impl App{
             Ok(receipt)
         })
     }
+}
+fn active_lineage<'a>(slot:&'a Option<LineageSession>,id:&str)->Result<&'a LineageSession>{
+    slot.as_ref().filter(|s|s.id==id).ok_or_else(||Error::new("STALE_SNAPSHOT",
+        "Lineage snapshot is absent or has been replaced; reopen the workbook"))
+}
+fn active_lineage_mut<'a>(slot:&'a mut Option<LineageSession>,id:&str)->Result<&'a mut LineageSession>{
+    slot.as_mut().filter(|s|s.id==id).ok_or_else(||Error::new("STALE_SNAPSHOT",
+        "Lineage snapshot is absent or has been replaced; reopen the workbook"))
 }
 fn parse<T:DeserializeOwned>(args:Value)->Result<T>{
     serde_json::from_value(args).map_err(|e|Error::new("ARGUMENT",e.to_string()))
