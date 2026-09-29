@@ -10,6 +10,7 @@
 ## What it does
 
 - Inspect fields, calculations, parameters, filters, sheets, dependencies, and package contents.
+- Navigate a read-only dependency graph from source fields through calculations, Rows, Columns, Marks and filters to worksheets and dashboards. Export every known link as JSON with explicit coverage gaps.
 - Validate known workbook rules, compare workbooks, and run declarative assertions.
 - Plan and apply typed calculation, parameter, and filter edits to a **new** workbook file while preserving unrelated content.
 
@@ -32,10 +33,12 @@ On Windows, run `target\release\tabkit.exe` with an absolute Windows workspace p
 
 To use MCP, configure your client to launch `tabkit --workspace <absolute-path> mcp` over stdio. See the [MCP configuration examples](examples/quick-mcp.example.json) for Tableau OAuth and [PAT](examples/quick-mcp-pat.example.json). For local workbook work, Tableau credentials are unnecessary.
 
+For lineage, call `workbook_lineage_open` once per MCP session, then `workbook_lineage_find`, `workbook_lineage_neighbors`, or the paged `workbook_lineage_impact`. Links point from an input to what depends on it; `upstream` reverses the navigation. `workbook_lineage_export` writes the complete known graph and coverage gaps to a new JSON file. In a one-shot CLI call, export accepts `input` instead of a session `snapshot_id`. A datasource filter's effect on a worksheet is shown through the datasource, separately from a field placed on a worksheet shelf.
+
 For edits, copy a workbook into a separate workspace, inspect it, then call `workbook_plan` and `workbook_apply` with reviewed JSON arguments. See the [plan](examples/plan.json) and [apply](examples/apply.template.json) examples. The source workbook is never overwritten.
 
 ## Scope
 
-Local validation checks XML and the Tableau structures `tabkit` understands; it does not execute Tableau or prove full workbook semantics. Unsupported edit shapes are rejected. Live Tableau, Amazon Quick Desktop, and native Hyper integration still require environment qualification.
+Local validation checks XML and the Tableau structures `tabkit` understands; it does not execute Tableau or prove full workbook semantics. Lineage covers known global calculations, Rows/Columns/Marks bindings, worksheet and datasource filters, worksheets and dashboards. Unresolved references and unmodeled constructs are reported as coverage gaps, never silently treated as absent. Unsupported edit shapes are rejected. Live Tableau, Amazon Quick Desktop, and native Hyper integration still require environment qualification.
 
 Run `cargo test --locked` for the local test suite. See the [architecture decisions](docs/adr/README.md) for the supported scope.

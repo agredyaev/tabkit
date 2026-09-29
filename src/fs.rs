@@ -134,6 +134,26 @@ impl Workspace {
         atomic_new(&out, bytes)?;
         Ok(out)
     }
+    pub fn write_new_stream(&self, relative: &str, limit: u64,
+        write: impl FnOnce(&mut dyn Write) -> Result<()>) -> Result<(PathBuf, String, u64)> {
+        let out = self.output(relative)?;
+        let parent = out.parent().ok_or_else(|| Error::new("PATH", "No output parent"))?;
+        let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+        let mut bounded = BoundedHashWriter { file: tmp.as_file_mut(), size: 0, limit,
+            hash: Sha256::new(), exceeded: false };
+        let result = write(&mut bounded);
+        if bounded.exceeded { return Err(Error::new("LIMIT", "Export exceeds configured file limit")); }
+        result?;
+        bounded.flush()?;
+        let size = bounded.size;
+        let hash = digest_hex(bounded.hash.finalize().into());
+        tmp.as_file().sync_all()?;
+        tmp.persist_noclobber(&out).map_err(|e| Error::new("OUTPUT_EXISTS", e.error.to_string()))?;
+        sync_dir(parent).map_err(|_| Error::new("COMMIT_DURABILITY_UNKNOWN",
+            "File exists but directory durability could not be confirmed; do not retry blindly")
+            .details(serde_json::json!({"output_may_exist":true,"sha256":hash})))?;
+        Ok((out, hash, size))
+    }
     pub fn internal_write(&self, name: &str, bytes: &[u8]) -> Result<PathBuf> {
         require(name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'), "INTERNAL", "Invalid state key")?;
         let path = self.state.join(name);
@@ -146,6 +166,26 @@ impl Workspace {
         require(!std::fs::symlink_metadata(&p)?.file_type().is_symlink(), "PATH", "Invalid state file")?;
         read_bounded(&p, max)
     }
+}
+struct BoundedHashWriter<'a> {
+    file: &'a mut File,
+    size: u64,
+    limit: u64,
+    hash: Sha256,
+    exceeded: bool,
+}
+impl Write for BoundedHashWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.size.checked_add(buf.len() as u64).is_none_or(|n| n > self.limit) {
+            self.exceeded = true;
+            return Err(std::io::Error::other("Export exceeds configured file limit"));
+        }
+        let n = self.file.write(buf)?;
+        self.size += n as u64;
+        self.hash.update(&buf[..n]);
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> { self.file.flush() }
 }
 pub fn atomic_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or_else(|| Error::new("PATH", "No output parent"))?;

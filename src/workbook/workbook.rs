@@ -1,5 +1,7 @@
 #[cfg(any(test, feature = "dev-tools"))]
 use crate::config::Limits;
+#[path = "lineage.rs"]
+pub mod lineage;
 use crate::{
     error::{
         Error,

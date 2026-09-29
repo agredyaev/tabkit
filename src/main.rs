@@ -202,3 +202,6 @@ mod xml_index_tests;
 #[cfg(test)]
 #[path = "../tests/unit/ownership_tests.rs"]
 mod ownership_tests;
+#[cfg(test)]
+#[path = "../tests/unit/lineage_tests.rs"]
+mod lineage_tests;
