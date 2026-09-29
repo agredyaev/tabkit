@@ -411,6 +411,21 @@ impl Graph {
             if xml.tag(n) == "filter" {
                 continue;
             }
+            if xml.tag(n) == "calculation" {
+                continue;
+            }
+            if xml.tag(n) == "manual-sort" {
+                if let Some(column)=xml.value(n,"column")
+                    && let Ok(analysis)=formula::analyze(column)
+                    && analysis.references.len()==1
+                    && let Some(field)=resolver.reference(Some(sheet),None,&analysis.references[0])
+                {
+                    raw.push((field,NodeRef::new(NodeKind::Worksheet,sid),EdgeKind::SortField));
+                } else {
+                    gap(&mut gaps,"SORT_REFERENCE",n,"Manual sort field is unresolved");
+                }
+                continue;
+            }
             if xml.tag(n) == "computed-sort" {
                 for (attribute, kind) in [
                     ("column", EdgeKind::SortField),
@@ -817,7 +832,7 @@ impl Resolver<'_> {
             .or_else(|| {
                 let inner = name.strip_prefix('[')?.strip_suffix(']')?;
                 let (prefix, rest) = inner.split_once(':')?;
-                if !matches!(prefix, "none" | "usr") { return None; }
+                if !matches!(prefix, "none" | "usr" | "sum" | "tmn" | "yr") { return None; }
                 let (field, suffix) = rest.rsplit_once(':')?;
                 if !matches!(suffix, "nk" | "ok" | "qk") { return None; }
                 self.book.field_lookup[ds.0 as usize]

@@ -70,7 +70,7 @@ fn structured_source_and_ui_routes_have_details_without_xml() {
         </datasource>
         <datasource name='Parameters'><column name='[P]' datatype='integer' role='measure' param-domain-type='list' value='1'><calculation class='tableau' formula='1'/></column></datasource>
       </datasources>
-      <worksheets><worksheet name='S'><table><view><filter class='categorical' column='[d].[id set]'/></view><panes><pane><add-in><type-settings><worksheet/></type-settings></add-in><encodings><color column='[d].[io:id set:nk]'/></encodings><manual-sort column='[d].[io:id set:nk]'/><customized-tooltip><formatted-text><run>&lt;[d].[id]&gt;</run><run>&lt;Sheet name=&quot;S&quot; filter=&quot;&lt;All Fields&gt;&quot;&gt;</run></formatted-text></customized-tooltip></pane></panes><rows>[d].[io:id set:nk]</rows></table></worksheet></worksheets>
+      <worksheets><worksheet name='S'><table><view><filter class='categorical' column='[d].[id set]'/><manual-sort column='[d].[yr:id:ok]'/></view><panes><pane><add-in><type-settings><worksheet/></type-settings></add-in><encodings><color column='[d].[io:id set:nk]'/><custom custom-type-name='target' column='[d].[sum:id:qk]'/></encodings><manual-sort column='[d].[io:id set:nk]'/><customized-tooltip><formatted-text><run>&lt;[d].[id]&gt;</run><run>&lt;Sheet name=&quot;S&quot; filter=&quot;&lt;All Fields&gt;&quot;&gt;</run></formatted-text></customized-tooltip></pane></panes><rows>[d].[io:id set:nk]</rows></table></worksheet></worksheets>
       <dashboards><dashboard name='D'><zones><zone name='S'/><zone type-v2='paramctrl' param='[Parameters].[P]' mode='compact'/><zone><flipboard><story-points><story-point id='1' caption='First' captured-sheet='S'/></story-points></flipboard></zone></zones></dashboard></dashboards>
       <actions><edit-parameter-action name='a'><activation type='on-select'/><source type='sheet' worksheet='S'/><params><param name='source-field' value='[d].[id]'/><param name='target-parameter' value='[Parameters].[P]'/></params></edit-parameter-action><edit-group-action name='b'><activation type='on-select'/><source type='sheet' worksheet='S'/><params><param name='target-group' value='[d].[id set]'/></params></edit-group-action></actions>
     </workbook>"#;
@@ -88,14 +88,15 @@ fn structured_source_and_ui_routes_have_details_without_xml() {
     let graph:Value=serde_json::from_slice(&std::fs::read(dir.path().join("graph.json")).unwrap()).unwrap();
     assert_eq!(graph["schema_version"],2);
     let kinds=graph["nodes"].as_array().unwrap().iter().map(|n|n["reference"]["kind"].as_str().unwrap()).collect::<std::collections::BTreeSet<_>>();
-    for kind in ["connection","physical_table","logical_table","custom_sql","initial_sql","join","relationship","set","action","tooltip","parameter_control","story","story_point","table_calculation"] {
+    for kind in ["connection","physical_table","logical_table","custom_sql","initial_sql","join","relationship","set","action","tooltip","parameter_control","story","story_point","table_calculation","custom_encoding"] {
         assert!(kinds.contains(kind),"missing {kind}");
     }
     let edges=graph["edges"].as_array().unwrap();
-    for kind in ["sql_read","join_input","join_output","relationship_end","field_origin","extract_field_origin","extract_in_logical","group_input","action_input","action_target","tooltip_input","tooltip_sheet","control_parameter","story_contains","table_calculation_input","table_calculation_order"] {
+    for kind in ["sql_read","join_input","join_output","relationship_end","field_origin","extract_field_origin","extract_in_logical","group_input","action_input","action_target","tooltip_input","tooltip_sheet","control_parameter","story_contains","table_calculation_input","table_calculation_order","custom_encoding_field","custom_encoding_on_sheet"] {
         assert!(edges.iter().any(|e|e["kind"]==kind),"missing {kind}");
     }
     assert_eq!(edges.iter().filter(|e|e["kind"]=="extract_in_logical").count(),2);
+    assert!(has(edges,("field",0),("worksheet",0),"sort_field"));
     for kind in ["rows","mark_color","sort_field","worksheet_filter_field","group_use","table_calculation_order"] {
         assert!(edges.iter().any(|e|e["from"]["kind"]=="set" && e["kind"]==kind),"set missing {kind}");
     }
@@ -104,7 +105,9 @@ fn structured_source_and_ui_routes_have_details_without_xml() {
     assert_eq!(graph["details"][join]["conditions"].as_array().unwrap().len(),2);
     let set=graph["nodes"].as_array().unwrap().iter().position(|n|n["reference"]["kind"]=="set").unwrap();
     assert_eq!(graph["details"][set]["definition"].as_array().unwrap().len(),2);
-    assert!(!graph["gaps"].as_array().unwrap().iter().any(|g|["UNRESOLVED_REFERENCE","SHELF_REFERENCE","MARK_REFERENCE","FILTER_REFERENCE","COLUMN_BINDING","TABLE_CALC_ORDER"].contains(&g["code"].as_str().unwrap_or(""))));
+    let custom=graph["nodes"].as_array().unwrap().iter().position(|n|n["reference"]["kind"]=="custom_encoding").unwrap();
+    assert_eq!(graph["details"][custom]["custom_type"],"target");
+    assert!(!graph["gaps"].as_array().unwrap().iter().any(|g|["UNRESOLVED_REFERENCE","SHELF_REFERENCE","MARK_REFERENCE","FILTER_REFERENCE","COLUMN_BINDING","TABLE_CALC_ORDER","SORT_REFERENCE","CUSTOM_ENCODING_FIELD"].contains(&g["code"].as_str().unwrap_or(""))));
     assert!(!graph["nodes"].as_array().unwrap().iter().any(|n|n["reference"]["kind"]=="physical_table" && n["name"]=="cte"));
 }
 
@@ -463,6 +466,27 @@ fn lineage_gaps_identify_the_affected_worksheet() {
             .unwrap()
             .contains("worksheet=Sales by Region")
     );
+}
+
+#[test]
+fn unresolved_custom_encoding_and_manual_sort_are_reported() {
+    let source = "<workbook><datasources><datasource name='d'><column name='[id]'/></datasource></datasources><worksheets><worksheet name='S'><table><view><datasources><datasource name='d'/></datasources><manual-sort column='[d].[missing]'/></view><panes><pane><encodings><custom custom-type-name='target' column='[d].[missing]'/></encodings></pane></panes></table></worksheet></worksheets></workbook>";
+    let (_dir, app) = setup(source, Limits::default());
+    let opened = call(&app, "workbook_lineage_open", json!({"input":"in.twb"})).unwrap();
+    assert_eq!(opened["gap_codes"]["SORT_REFERENCE"], 1);
+    assert_eq!(opened["gap_codes"]["CUSTOM_ENCODING_FIELD"], 1);
+    assert!(opened["gap_codes"].get("COLUMN_BINDING").is_none());
+}
+
+#[test]
+fn exact_field_name_precedes_generated_wrapper_fallback() {
+    let source = "<workbook><datasources><datasource name='d'><column name='[id]'/><column name='[sum:id:qk]'/></datasource></datasources><worksheets><worksheet name='S'><table><view><datasources><datasource name='d'/></datasources></view><panes><pane><encodings><custom custom-type-name='target' column='[d].[sum:id:qk]'/></encodings></pane></panes></table></worksheet></worksheets></workbook>";
+    let (dir, app) = setup(source, Limits::default());
+    call(&app, "workbook_lineage_export", json!({"input":"in.twb","output":"graph.json"})).unwrap();
+    let graph: Value = serde_json::from_slice(&std::fs::read(dir.path().join("graph.json")).unwrap()).unwrap();
+    let edges = graph["edges"].as_array().unwrap();
+    assert!(has(edges, ("field", 1), ("custom_encoding", 0), "custom_encoding_field"));
+    assert!(!has(edges, ("field", 0), ("custom_encoding", 0), "custom_encoding_field"));
 }
 
 #[test]

@@ -242,7 +242,7 @@ pub(super) fn build(
         out.edge(group, NodeRef::new(NodeKind::Worksheet, sid), kind);
         out.resolved(
             if kind == EdgeKind::SortField {
-                "COLUMN_BINDING"
+                "SORT_REFERENCE"
             } else {
                 "MARK_REFERENCE"
             },
@@ -422,6 +422,34 @@ pub(super) fn build(
     for (index, _) in xml.nodes.iter().enumerate() {
         let node = NodeId(index as u32);
         match xml.tag(node) {
+            "custom" if xml.ancestor(node, "encodings").is_some() => {
+                let Some(sheet) = xml.ancestor(node, "worksheet") else {
+                    out.gap("CUSTOM_ENCODING_SCOPE", node, "Custom encoding is outside a worksheet");
+                    continue;
+                };
+                let Some(&sid) = sheets.get(&sheet) else {
+                    out.gap("CUSTOM_ENCODING_SCOPE", node, "Custom encoding worksheet is unresolved");
+                    continue;
+                };
+                let owner = NodeRef::new(NodeKind::Worksheet, sid);
+                let kind = xml.value(node, "custom-type-name").unwrap_or("custom");
+                let column = xml.value(node, "column").unwrap_or("");
+                let attributes: BTreeMap<_, _> = xml.attributes(node)
+                    .map(|a| (a.name.to_owned(), a.value.to_owned())).collect();
+                let reference = out.add(NodeKind::CustomEncoding, column, &format!("{kind} encoding"), None,
+                    Some(owner), json!({"custom_type":kind,"column":column,"attributes":attributes}));
+                out.edge(reference, owner, EdgeKind::CustomEncodingOnSheet);
+                let source = formula::analyze(column).ok()
+                    .filter(|a| a.references.len() == 1)
+                    .and_then(|a| resolver.reference(Some(sheet), None, &a.references[0])
+                        .or_else(|| group_reference(book, resolver, &groups, Some(sheet), None, &a.references[0])));
+                if let Some(source) = source {
+                    out.edge(source, reference, EdgeKind::CustomEncodingField);
+                } else {
+                    out.gap("CUSTOM_ENCODING_FIELD", node, "Custom encoding field is unresolved");
+                }
+                out.resolved("COLUMN_BINDING", node);
+            }
             "customized-tooltip" => {
                 let Some(sheet) = xml.ancestor(node, "worksheet") else {
                     continue;

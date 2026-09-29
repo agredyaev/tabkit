@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 #[path = "lineage/build.rs"]
 mod build;
-const NODE_KIND_COUNT: usize = 24;
+const NODE_KIND_COUNT: usize = 25;
 
 #[derive(
     Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, JsonSchema,
@@ -38,6 +38,7 @@ pub enum NodeKind {
     Story,
     StoryPoint,
     TableCalculation,
+    CustomEncoding,
 }
 
 impl NodeKind {
@@ -118,6 +119,8 @@ pub enum EdgeKind {
     TableCalculationInput,
     TableCalculationOrder,
     TableCalculationOnSheet,
+    CustomEncodingField,
+    CustomEncodingOnSheet,
 }
 
 #[derive(Clone, Serialize)]
@@ -175,7 +178,7 @@ pub struct Graph {
     pub gaps: Vec<Gap>,
 }
 
-const EXCLUDED: &[&str] = &["table_calculation_runtime", "dynamic_sql_effects", "tableau_action_execution"];
+const EXCLUDED: &[&str] = &["table_calculation_runtime", "dynamic_sql_effects", "tableau_action_execution", "viz_extension_runtime"];
 
 impl Graph {
     pub fn count(&self) -> (usize, usize) {

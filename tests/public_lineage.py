@@ -61,6 +61,7 @@ def count_xml(root):
         "join": sum(relation.get("type") == "join" for relation in root.iter("relation")),
         "tooltip": len(list(root.iter("customized-tooltip"))),
         "parameter_control": sum(zone.get("type-v2", zone.get("type")) == "paramctrl" for zone in root.iter("zone")),
+        "custom_encoding": len(root.findall("./worksheets/worksheet//encodings/custom")),
     }
 
 
@@ -87,8 +88,13 @@ def check(binary, workspace, name, data):
     source = ET.fromstring(data)
     expected = count_xml(source)
     actual = Counter(node["reference"]["kind"] for node in graph["nodes"])
-    for kind in ("worksheet", "dashboard", "action", "table_calculation", "story_point", "relationship", "join", "tooltip", "parameter_control"):
+    for kind in ("worksheet", "dashboard", "action", "table_calculation", "story_point", "relationship", "join", "tooltip", "parameter_control", "custom_encoding"):
         assert actual[kind] == expected[kind], (name, kind, actual[kind], expected[kind])
+    assert Counter(node.get("custom-type-name", "custom") for node in source.findall("./worksheets/worksheet//encodings/custom")) == Counter(
+        graph["details"][i]["custom_type"]
+        for i, node in enumerate(graph["nodes"])
+        if node["reference"]["kind"] == "custom_encoding"
+    )
     assert actual["set"] + actual["group"] == expected["set_or_group"]
     assert Counter(len(group.findall("./groupfilter")) for group in source.iter("group")) == Counter(
         len(graph["details"][i]["definition"])
@@ -110,7 +116,16 @@ def check(binary, workspace, name, data):
         assert any(edge["from"]["kind"] == "set" and edge["kind"] == "table_calculation_order" for edge in graph["edges"])
     if name in ("ExecutiveSummary_17887725885850", "exttest", "VisualizeQuotaAttainmentforExecutivesinMultipleWays"):
         assert not any(gap["code"] == "FIELD_ORIGIN" for gap in graph["gaps"])
+        assert not any(gap["code"] == "CUSTOM_ENCODING_FIELD" for gap in graph["gaps"])
         assert any(edge["kind"] == "extract_field_origin" for edge in graph["edges"])
+    if name == "ExecutiveSummary_17887725885850":
+        assert {gap["code"] for gap in graph["gaps"]} == {"UNSUPPORTED_CALCULATION_CLASS"}
+    if name == "VisualizeQuotaAttainmentforExecutivesinMultipleWays":
+        assert not graph["gaps"]
+    if name == "exttest":
+        assert all(gap["code"] == "UNSUPPORTED_CALCULATION_CLASS" or any(
+            special in gap.get("context", "") for special in (":Measure Names", "Multiple Values")
+        ) for gap in graph["gaps"])
     print(f"{name}: {len(graph['nodes'])} nodes, {len(graph['edges'])} edges, {elapsed_ms:.1f} ms")
 
 

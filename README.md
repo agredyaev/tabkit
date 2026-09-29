@@ -10,7 +10,7 @@
 ## What it does
 
 - Inspect fields, calculations, parameters, filters, sheets, dependencies, and package contents.
-- Navigate a read-only graph from source tables and SQL through fields, calculations, filters and actions to worksheets, dashboards and stories. Inspect joins, relationships, sets, tooltips and table-calculation settings on demand. Export known links with explicit coverage gaps.
+- Navigate a read-only graph from source tables and SQL through fields, calculations, filters and actions to worksheets, dashboards and stories. Inspect joins, relationships, sets, tooltips, custom visual encodings and table-calculation settings on demand. Export known links with explicit coverage gaps.
 - Validate known workbook rules, compare workbooks, and run declarative assertions.
 - Plan and apply typed calculation, parameter, and filter edits to a **new** workbook file while preserving unrelated content.
 

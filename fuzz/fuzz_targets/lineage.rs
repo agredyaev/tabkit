@@ -10,7 +10,7 @@ use tabkit_fuzz::{
     },
 };
 
-fn check(source: Vec<u8>, must_parse: bool) {
+fn check(source: Vec<u8>, must_parse: bool, custom: bool, manual_sort: bool) {
     let limits = Limits {
         xml_bytes: 65536,
         xml_nodes: 10000,
@@ -32,6 +32,23 @@ fn check(source: Vec<u8>, must_parse: bool) {
     let edges = json["edges"].as_array().unwrap();
     assert_eq!(graph.count(), (nodes.len(), edges.len()));
     assert_eq!(nodes.len(), details.len());
+    if must_parse {
+        assert_eq!(
+            nodes.iter().filter(|node| node["reference"]["kind"] == "custom_encoding").count(),
+            usize::from(custom)
+        );
+        assert_eq!(
+            edges.iter().filter(|edge| edge["kind"] == "custom_encoding_field").count(),
+            usize::from(custom)
+        );
+        assert_eq!(
+            edges.iter().filter(|edge| edge["kind"] == "sort_field").count(),
+            usize::from(manual_sort)
+        );
+        assert!(!json["gaps"].as_array().unwrap().iter().any(|gap| {
+            gap["code"] == "CUSTOM_ENCODING_FIELD" || gap["code"] == "SORT_REFERENCE"
+        }));
+    }
     let mut refs = BTreeSet::new();
     for node in nodes {
         let reference: NodeRef = serde_json::from_value(node["reference"].clone()).unwrap();
@@ -80,7 +97,7 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     if data.starts_with(b"<") {
-        check(data.to_vec(), false);
+        check(data.to_vec(), false, false, false);
         return;
     }
     let bit = |i: usize| data.get(i).copied().unwrap_or(0) & 1 != 0;
@@ -132,8 +149,18 @@ fuzz_target!(|data: &[u8]| {
     } else {
         ""
     };
+    let custom = if bit(8) {
+        "<custom custom-type-name='target' column='[d].[sum:id:qk]'/>"
+    } else {
+        ""
+    };
+    let manual_sort = if bit(9) {
+        "<manual-sort column='[d].[yr:id:ok]' direction='ASC'/>"
+    } else {
+        ""
+    };
     let source = format!(
-        "<workbook source-build='2025.3.1' xmlns:user='http://www.tableausoftware.com/xml/user'><datasources><datasource name='d'><named-connections><named-connection name='c'><connection class='postgres'/></named-connection></named-connections><column name='[id]' datatype='integer' role='dimension'/><column name='[calc]' datatype='integer' role='measure'><calculation class='tableau' formula='[id]'>{table_calc}</calculation></column><group name='[S]' user:ui-builder='filter-group'><groupfilter function='level-members' level='[id]'/></group><object-graph><objects><object id='orders'><properties context=''>{relation}</properties>{extract}</object>{relationship}</objects>{relationship_edge}</object-graph></datasource></datasources><worksheets><worksheet name='S'><table><view><datasources><datasource name='d'/></datasources><filter class='categorical' column='[d].[S]'/></view><panes><pane><encodings><color column='[d].[io:S:nk]'/></encodings>{tooltip}</pane></panes><rows>[d].[io:S:nk]</rows></table></worksheet></worksheets><dashboards><dashboard name='D'><zones><zone name='S'/></zones></dashboard></dashboards>{action}{story}</workbook>"
+        "<workbook source-build='2025.3.1' xmlns:user='http://www.tableausoftware.com/xml/user'><datasources><datasource name='d'><named-connections><named-connection name='c'><connection class='postgres'/></named-connection></named-connections><column name='[id]' datatype='integer' role='dimension'/><column name='[calc]' datatype='integer' role='measure'><calculation class='tableau' formula='[id]'>{table_calc}</calculation></column><group name='[S]' user:ui-builder='filter-group'><groupfilter function='level-members' level='[id]'/></group><object-graph><objects><object id='orders'><properties context=''>{relation}</properties>{extract}</object>{relationship}</objects>{relationship_edge}</object-graph></datasource></datasources><worksheets><worksheet name='S'><table><view><datasources><datasource name='d'/></datasources><filter class='categorical' column='[d].[S]'/>{manual_sort}</view><panes><pane><encodings><color column='[d].[io:S:nk]'/>{custom}</encodings>{tooltip}</pane></panes><rows>[d].[io:S:nk]</rows></table></worksheet></worksheets><dashboards><dashboard name='D'><zones><zone name='S'/></zones></dashboard></dashboards>{action}{story}</workbook>"
     );
-    check(source.into_bytes(), true);
+    check(source.into_bytes(), true, bit(8), bit(9));
 });
