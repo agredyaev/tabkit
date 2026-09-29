@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.0](https://github.com/agredyaev/tabkit/compare/tabkit-v0.1.6...tabkit-v0.2.0) (2026-09-29)
+
+
+### Features
+
+* add workbook dependency graph and MCP navigation ([ef0015f](https://github.com/agredyaev/tabkit/commit/ef0015fa2e6facc6bca8b0e4cf787dccac2b944c))
+* add workbook lineage navigation ([53866fa](https://github.com/agredyaev/tabkit/commit/53866fa5f231cf2f82694a1266070ac0433135b0))
+* cover public workbook lineage context ([51da3d7](https://github.com/agredyaev/tabkit/commit/51da3d76dd31d37100eeb3fc68d71e6c27f6bff2))
+* expose datasource SQL in workbook inspection ([e40773c](https://github.com/agredyaev/tabkit/commit/e40773cb360ec680581e1467e432e53142cc74d7))
+* extend workbook lineage navigation ([53e2bbb](https://github.com/agredyaev/tabkit/commit/53e2bbbbf639fad51302934bf726f10b86bf1b71))
+* model custom visual bindings in lineage ([fc80f79](https://github.com/agredyaev/tabkit/commit/fc80f79a1a10bfe179a539f77529291c7cedf718))
+
+
+### Bug Fixes
+
+* bundle Hyper runtime with Windows release ([f39c26a](https://github.com/agredyaev/tabkit/commit/f39c26a772ce5da64a40708877e00fd04709bb69))
+* expose workbook filter conditions in lineage details ([a86b71a](https://github.com/agredyaev/tabkit/commit/a86b71a4e900d242b109e397e07bc488c56b1e87))
+* normalize lineage fixture line endings ([d7795b4](https://github.com/agredyaev/tabkit/commit/d7795b4372e15fe63fc8ab355fe5fbf9eed13894))
+* query Hyper extracts through native catalog ([07f3faa](https://github.com/agredyaev/tabkit/commit/07f3faacd1ef24d3cfbd3fc5eac30f8da93f2667))
+* ship working Hyper MCP in Windows release ([990a882](https://github.com/agredyaev/tabkit/commit/990a882a75fd2439292a307e193ad3d65a1c494e))
+
 ## [0.1.6](https://github.com/agredyaev/tabkit/compare/tabkit-v0.1.5...tabkit-v0.1.6) (2026-09-29)
 
 
