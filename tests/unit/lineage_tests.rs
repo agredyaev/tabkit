@@ -226,16 +226,29 @@ fn extract_filter_is_not_reported_as_datasource_filter() {
         json!({"input":"in.twb","output":"graph.json"}),
     )
     .unwrap();
-    assert_eq!(result["coverage"]["status"], "partial");
+    assert_eq!(result["coverage"]["status"], "complete_for_v1_routes");
     let graph: Value =
         serde_json::from_slice(&std::fs::read(dir.path().join("graph.json")).unwrap()).unwrap();
     assert!(
-        graph["gaps"]
+        graph["nodes"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|g| g["code"] == "EXTRACT_FILTER")
+            .any(|n| n["reference"]["kind"] == "extract_filter")
     );
+    let edges = graph["edges"].as_array().unwrap();
+    assert!(has(
+        edges,
+        ("field", 2),
+        ("extract_filter", 0),
+        "extract_filter_field"
+    ));
+    assert!(has(
+        edges,
+        ("extract_filter", 0),
+        ("datasource", 0),
+        "extract_filtered"
+    ));
     assert!(
         !graph["nodes"]
             .as_array()
@@ -243,6 +256,142 @@ fn extract_filter_is_not_reported_as_datasource_filter() {
             .iter()
             .any(|n| n["reference"]["kind"] == "datasource_filter")
     );
+}
+
+#[test]
+fn shared_view_filter_has_a_field_but_no_assumed_worksheet_effect() {
+    let source = source().replacen(
+        "</datasources>",
+        "</datasources><shared-views><shared-view name='ds_orders'><filter class='categorical' column='[ds_orders].[Region]'/></shared-view></shared-views>",
+        1,
+    );
+    let (dir, app) = setup(&source, Limits::default());
+    let opened = call(&app, "workbook_lineage_open", json!({"input":"in.twb"})).unwrap();
+    assert_eq!(opened["gap_codes"]["SHARED_VIEW_SCOPE"], 1);
+    call(
+        &app,
+        "workbook_lineage_export",
+        json!({
+            "snapshot_id":opened["snapshot_id"],"output":"graph.json"
+        }),
+    )
+    .unwrap();
+    let graph: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("graph.json")).unwrap()).unwrap();
+    let edges = graph["edges"].as_array().unwrap();
+    assert!(has(
+        edges,
+        ("field", 2),
+        ("shared_view_filter", 0),
+        "shared_view_filter_field"
+    ));
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["from"] == json!({"kind":"shared_view_filter","id":0}))
+    );
+}
+
+#[test]
+fn local_calculation_connects_source_to_shelf_and_dashboard() {
+    let source = source().replacen(
+        "</datasource-dependencies>",
+        "<column name='[Tmp]' caption='Local total'><calculation class='tableau' formula='[Sales] * 2'/></column><column-instance name='[usr:Tmp:qk]' column='[Tmp]'/></datasource-dependencies>",
+        1,
+    )
+    .replace("<cols>[ds_orders].[Ratio2]</cols>", "<cols>[ds_orders].[usr:Tmp:qk]</cols>")
+    .replace("</view>", "<computed-sort column='[ds_orders].[usr:Tmp:qk]' using='[ds_orders].[none:Sales:qk]'/></view>")
+    .replace("<color column='[ds_orders].[none:Region:nk]'/>", "<color column='[ds_orders].[none:Region:nk]'/><wedge-size column='[ds_orders].[usr:Tmp:qk]'/>");
+    let (dir, app) = setup(&source, Limits::default());
+    call(
+        &app,
+        "workbook_lineage_export",
+        json!({"input":"in.twb","output":"graph.json"}),
+    )
+    .unwrap();
+    let graph: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("graph.json")).unwrap()).unwrap();
+    let local = graph["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["reference"]["kind"] == "local_field" && n["name"] == "[Tmp]")
+        .unwrap();
+    let id = local["reference"]["id"].as_u64().unwrap();
+    assert_eq!(local["formula"], "[Sales] * 2");
+    assert_eq!(local["worksheet"], json!({"kind":"worksheet","id":0}));
+    let edges = graph["edges"].as_array().unwrap();
+    assert!(has(edges, ("field", 0), ("local_field", id), "calculation"));
+    assert!(has(edges, ("local_field", id), ("worksheet", 0), "cols"));
+    assert!(has(
+        edges,
+        ("local_field", id),
+        ("worksheet", 0),
+        "sort_field"
+    ));
+    assert!(has(edges, ("field", 0), ("worksheet", 0), "sort_using"));
+    assert!(has(
+        edges,
+        ("local_field", id),
+        ("worksheet", 0),
+        "mark_wedge_size"
+    ));
+    assert!(has(
+        edges,
+        ("worksheet", 0),
+        ("dashboard", 0),
+        "sheet_in_dashboard"
+    ));
+    assert!(
+        !graph["gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|g| g["code"] == "LOCAL_DEFINITION")
+    );
+}
+
+#[test]
+fn lineage_gaps_identify_the_affected_worksheet() {
+    let source = source().replace(
+        "<color column='[ds_orders].[none:Region:nk]'/>",
+        "<color column='[ds_orders].[none:Region:nk]'/><unknown-binding column='[ds_orders].[Sales]'/>",
+    );
+    let (_dir, app) = setup(&source, Limits::default());
+    let opened = call(&app, "workbook_lineage_open", json!({"input":"in.twb"})).unwrap();
+    let page = call(
+        &app,
+        "workbook_lineage_gaps",
+        json!({
+            "snapshot_id":opened["snapshot_id"],"limit":1
+        }),
+    )
+    .unwrap();
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["items"][0]["code"], "COLUMN_BINDING");
+    assert!(
+        page["items"][0]["context"]
+            .as_str()
+            .unwrap()
+            .contains("worksheet=Sales by Region")
+    );
+}
+
+#[test]
+fn differing_worksheet_formula_copy_is_a_coverage_gap() {
+    let source = source();
+    let marker = "<datasource-dependencies datasource='ds_orders'>";
+    let (before, after) = source.split_once(marker).unwrap();
+    let changed = after.replacen(
+        "formula='[Profit] / [Sales]'",
+        "formula='[Profit] + [Sales]'",
+        1,
+    );
+    assert_ne!(changed, after);
+    let source = format!("{before}{marker}{changed}");
+    let (_dir, app) = setup(&source, Limits::default());
+    let opened = call(&app, "workbook_lineage_open", json!({"input":"in.twb"})).unwrap();
+    assert_eq!(opened["gap_codes"]["INCONSISTENT_DEFINITION"], 1);
 }
 
 #[test]

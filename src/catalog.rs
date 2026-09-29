@@ -42,6 +42,7 @@ pub fn tools()->Result<Vec<Tool>>{
     tool::<app::LineageFind>("workbook_lineage_find","Search the open lineage graph by caption or internal-name prefix. IDs are scoped to snapshot_id.",true,false,false)?,
     tool::<app::LineageNeighbors>("workbook_lineage_neighbors","Page through direct upstream or downstream field, filter, sheet and dashboard links in the open graph.",true,false,false)?,
     tool::<app::LineageImpact>("workbook_lineage_impact","Traverse all reachable links in bounded pages. Start with from and direction, then continue with cursor; each new start replaces the prior traversal.",true,false,false)?,
+    tool::<app::LineageGaps>("workbook_lineage_gaps","Page through unresolved or excluded lineage facts with workbook context. Check these before drawing completeness conclusions.",true,false,false)?,
     tool::<app::LineageExport>("workbook_lineage_export","Write a complete deterministic lineage JSON to a NEW workspace file from snapshot_id or input; includes coverage gaps.",false,false,false)?,
     tool::<app::PlanRequest>("workbook_plan","Plan typed formula/parameter/filter edits. Creates a reviewable plan file; does not change the source. No raw XML operation.",false,false,false)?,
     tool::<app::Apply>("workbook_apply","Recompute and verify an approved plan, then create a new TWB/TWBX candidate. Never trusts external raw patches or overwrites the source.",false,false,false)?,

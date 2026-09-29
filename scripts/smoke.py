@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix="tabkit-smoke-") as directory:
             send({"jsonrpc":"2.0","method":"notifications/initialized"})
             send({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
             tools = receive(2)["tools"]
-            check("MCP retains 23 tools including REST and Hyper", len(tools)==23 and {"tableau_publish","tableau_explore","hyper_query"}.issubset({t["name"] for t in tools}))
+            check("MCP retains 29 tools including REST, Hyper and lineage", len(tools)==29 and {"tableau_publish","tableau_explore","hyper_query","workbook_lineage_gaps"}.issubset({t["name"] for t in tools}))
             send({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"system_status","arguments":{}}})
             result = receive(3)
             check("MCP tool dispatch", not result.get("isError",False) and json.loads(result["content"][0]["text"])["engine"] == "0.1.5")

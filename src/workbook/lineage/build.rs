@@ -17,13 +17,9 @@ impl Graph {
                 code: d.code.clone(),
                 object: d.object.clone(),
                 detail: d.message.clone(),
+                context: None,
             })
             .collect();
-        gaps.extend(book.local_definitions.iter().map(|d| Gap {
-            code: "LOCAL_DEFINITION".into(),
-            object: format!("xml_node:{}", d.node_id.0),
-            detail: d.reason.clone(),
-        }));
         let mut worksheet_ids = BTreeMap::new();
         for (i, &n) in xml.semantic.worksheets.iter().enumerate() {
             worksheet_ids.insert(n, i);
@@ -35,6 +31,8 @@ impl Graph {
         let mut filters = Vec::new();
         let mut worksheet_filter_count = 0;
         let mut datasource_filter_count = 0;
+        let mut extract_filter_count = 0;
+        let mut shared_view_filter_count = 0;
         for &n in &xml.semantic.filters {
             if let Some(sheet) = xml.ancestor(n, "worksheet") {
                 filters.push((
@@ -47,12 +45,17 @@ impl Graph {
                 ));
                 worksheet_filter_count += 1;
             } else if xml.ancestor(n, "extract").is_some() {
-                gap(
-                    &mut gaps,
-                    "EXTRACT_FILTER",
+                let owner = xml
+                    .ancestor(n, "datasource")
+                    .and_then(|ds| xml.value(ds, "name"))
+                    .and_then(|name| book.datasource_lookup.get(name))
+                    .map(|id| NodeRef::new(NodeKind::Datasource, id.0 as usize));
+                filters.push((
                     n,
-                    "Extract filter is outside v1 datasource-filter lineage",
-                );
+                    NodeRef::new(NodeKind::ExtractFilter, extract_filter_count),
+                    owner,
+                ));
+                extract_filter_count += 1;
             } else if let Some(ds) = xml.ancestor(n, "datasource") {
                 let owner = xml
                     .value(ds, "name")
@@ -64,6 +67,19 @@ impl Graph {
                     owner,
                 ));
                 datasource_filter_count += 1;
+            } else if xml.ancestor(n, "shared-view").is_some() {
+                filters.push((
+                    n,
+                    NodeRef::new(NodeKind::SharedViewFilter, shared_view_filter_count),
+                    None,
+                ));
+                shared_view_filter_count += 1;
+                gap(
+                    &mut gaps,
+                    "SHARED_VIEW_SCOPE",
+                    n,
+                    "Shared-view filter target worksheets are not established",
+                );
             } else {
                 gap(
                     &mut gaps,
@@ -73,6 +89,42 @@ impl Graph {
                 );
             }
         }
+        let mut local_definitions = Vec::new();
+        for definition in &book.local_definitions {
+            let sheet = xml
+                .ancestor(definition.node_id, "worksheet")
+                .and_then(|node| worksheet_ids.get(&node).map(|&id| (node, id)));
+            let datasource = xml
+                .ancestor(definition.node_id, "datasource-dependencies")
+                .and_then(|node| xml.value(node, "datasource"))
+                .and_then(|name| book.datasource_lookup.get(name).copied());
+            if let (Some((sheet, sheet_id)), Some(datasource)) = (sheet, datasource) {
+                local_definitions.push((definition, sheet, sheet_id, datasource));
+            } else {
+                gap(
+                    &mut gaps,
+                    "LOCAL_DEFINITION",
+                    definition.node_id,
+                    "Local field has no known worksheet or datasource",
+                );
+            }
+        }
+        for field in &book.fields {
+            for &copy in field.copies.iter().skip(1) {
+                let formula = xml
+                    .named_children(copy, "calculation")
+                    .next()
+                    .and_then(|node| xml.value(node, "formula"));
+                if formula != field.formula.as_deref() {
+                    gap(
+                        &mut gaps,
+                        "INCONSISTENT_DEFINITION",
+                        copy,
+                        "Worksheet copy differs from the indexed field formula",
+                    );
+                }
+            }
+        }
         let counts = [
             book.fields.len(),
             book.datasources.len(),
@@ -80,8 +132,11 @@ impl Graph {
             datasource_filter_count,
             book.worksheets.len(),
             book.dashboards.len(),
+            local_definitions.len(),
+            extract_filter_count,
+            shared_view_filter_count,
         ];
-        let mut bases = [0usize; 7];
+        let mut bases = [0usize; 10];
         for (i, count) in counts.into_iter().enumerate() {
             require(
                 count <= u32::MAX as usize,
@@ -93,17 +148,21 @@ impl Graph {
                 .ok_or_else(|| Error::new("LIMIT", "Lineage node count overflow"))?;
         }
         require(
-            bases[6] <= u32::MAX as usize,
+            bases[9] <= u32::MAX as usize,
             "LIMIT",
             "Too many lineage nodes",
         )?;
-        let mut nodes = Vec::with_capacity(bases[6]);
+        let mut nodes = Vec::with_capacity(bases[9]);
         for (i, f) in book.fields.iter().enumerate() {
             nodes.push(GraphNode {
                 reference: NodeRef::new(NodeKind::Field, i),
                 name: f.name.clone(),
                 caption: f.caption.clone(),
                 datasource: Some(NodeRef::new(NodeKind::Datasource, f.datasource.0 as usize)),
+                worksheet: None,
+                formula: f.formula.clone(),
+                data_type: Some(f.datatype.clone()),
+                role: Some(f.role.clone()),
             });
         }
         for (i, d) in book.datasources.iter().enumerate() {
@@ -112,19 +171,23 @@ impl Graph {
                 name: d.name.clone(),
                 caption: d.caption.clone(),
                 datasource: None,
+                worksheet: None,
+                formula: None,
+                data_type: None,
+                role: None,
             });
         }
-        for (n, r, _) in filters
+        for (n, r, owner) in filters
             .iter()
             .filter(|(_, r, _)| r.kind == NodeKind::WorksheetFilter)
         {
-            nodes.push(filter_node(xml, *n, *r));
+            nodes.push(filter_node(xml, *n, *r, *owner));
         }
-        for (n, r, _) in filters
+        for (n, r, owner) in filters
             .iter()
             .filter(|(_, r, _)| r.kind == NodeKind::DatasourceFilter)
         {
-            nodes.push(filter_node(xml, *n, *r));
+            nodes.push(filter_node(xml, *n, *r, *owner));
         }
         for (i, name) in book.worksheets.iter().enumerate() {
             nodes.push(GraphNode {
@@ -132,6 +195,10 @@ impl Graph {
                 name: name.clone(),
                 caption: name.clone(),
                 datasource: None,
+                worksheet: None,
+                formula: None,
+                data_type: None,
+                role: None,
             });
         }
         for (i, name) in book.dashboards.iter().enumerate() {
@@ -140,7 +207,61 @@ impl Graph {
                 name: name.clone(),
                 caption: name.clone(),
                 datasource: None,
+                worksheet: None,
+                formula: None,
+                data_type: None,
+                role: None,
             });
+        }
+        let mut local_lookup = BTreeMap::<(NodeId, DatasourceId, String), BTreeSet<NodeRef>>::new();
+        for (id, &(definition, sheet, sheet_id, datasource)) in local_definitions.iter().enumerate()
+        {
+            let reference = NodeRef::new(NodeKind::LocalField, id);
+            let name = definition.name.clone().unwrap_or_default();
+            if name.is_empty() {
+                gap(
+                    &mut gaps,
+                    "LOCAL_DEFINITION",
+                    definition.node_id,
+                    "Local field has no internal name",
+                );
+            } else {
+                local_lookup
+                    .entry((sheet, datasource, name.clone()))
+                    .or_default()
+                    .insert(reference);
+            }
+            nodes.push(GraphNode {
+                reference,
+                caption: xml
+                    .value(definition.node_id, "caption")
+                    .unwrap_or(&name)
+                    .into(),
+                name,
+                datasource: Some(NodeRef::new(NodeKind::Datasource, datasource.0 as usize)),
+                worksheet: Some(NodeRef::new(NodeKind::Worksheet, sheet_id)),
+                formula: definition.formula.clone(),
+                data_type: xml.value(definition.node_id, "datatype").map(str::to_owned),
+                role: xml.value(definition.node_id, "role").map(str::to_owned),
+            });
+        }
+        for (n, r, owner) in filters
+            .iter()
+            .filter(|(_, r, _)| r.kind == NodeKind::ExtractFilter)
+        {
+            nodes.push(filter_node(xml, *n, *r, *owner));
+        }
+        for (n, r, _) in filters
+            .iter()
+            .filter(|(_, r, _)| r.kind == NodeKind::SharedViewFilter)
+        {
+            let mut node = filter_node(xml, *n, *r, None);
+            node.datasource = xml
+                .ancestor(*n, "shared-view")
+                .and_then(|view| xml.value(view, "name"))
+                .and_then(|name| book.datasource_lookup.get(name))
+                .map(|ds| NodeRef::new(NodeKind::Datasource, ds.0 as usize));
+            nodes.push(node);
         }
         let mut raw = Vec::<(NodeRef, NodeRef, EdgeKind)>::new();
         for e in &book.edges {
@@ -215,12 +336,46 @@ impl Graph {
                 }
             }
         }
-        let instances = instances(&book);
+        let instances = instances(&book, &local_lookup);
         let resolver = Resolver {
             book: &book,
             instances: &instances,
+            local_lookup: &local_lookup,
             sheet_sources: &sheet_sources,
         };
+        for (id, &(definition, sheet, _, datasource)) in local_definitions.iter().enumerate() {
+            let Some(formula) = definition.formula.as_deref() else {
+                continue;
+            };
+            match formula::analyze(formula) {
+                Ok(analysis) => {
+                    for reference in analysis.references {
+                        if let Some(source) =
+                            resolver.reference(Some(sheet), Some(datasource), &reference)
+                        {
+                            raw.push((
+                                source,
+                                NodeRef::new(NodeKind::LocalField, id),
+                                EdgeKind::Calculation,
+                            ));
+                        } else {
+                            gap(
+                                &mut gaps,
+                                "LOCAL_FORMULA_REFERENCE",
+                                definition.node_id,
+                                "Unresolved or ambiguous local calculation input",
+                            );
+                        }
+                    }
+                }
+                Err(_) => gap(
+                    &mut gaps,
+                    "LOCAL_FORMULA",
+                    definition.node_id,
+                    "Local calculation could not be analyzed",
+                ),
+            }
+        }
         for &n in &xml.semantic.shelves {
             let Some(sheet) = xml.ancestor(n, "worksheet") else {
                 continue;
@@ -250,11 +405,9 @@ impl Graph {
                 Ok(analysis) => {
                     for reference in analysis.references {
                         match resolver.reference(Some(sheet), None, &reference) {
-                            Some(fid) => raw.push((
-                                field_ref(fid),
-                                NodeRef::new(NodeKind::Worksheet, sid),
-                                kind,
-                            )),
+                            Some(field) => {
+                                raw.push((field, NodeRef::new(NodeKind::Worksheet, sid), kind))
+                            }
                             None => gap(
                                 &mut gaps,
                                 "SHELF_REFERENCE",
@@ -282,6 +435,30 @@ impl Graph {
             if xml.tag(n) == "filter" {
                 continue;
             }
+            if xml.tag(n) == "computed-sort" {
+                for (attribute, kind) in [
+                    ("column", EdgeKind::SortField),
+                    ("using", EdgeKind::SortUsing),
+                ] {
+                    let Some(expression) = xml.value(n, attribute) else {
+                        gap(&mut gaps, "SORT_REFERENCE", n, "Sort field is missing");
+                        continue;
+                    };
+                    match formula::analyze(expression) {
+                        Ok(analysis) if analysis.references.len() == 1 => {
+                            if let Some(field) =
+                                resolver.reference(Some(sheet), None, &analysis.references[0])
+                            {
+                                raw.push((field, NodeRef::new(NodeKind::Worksheet, sid), kind));
+                            } else {
+                                gap(&mut gaps, "SORT_REFERENCE", n, "Unresolved sort field");
+                            }
+                        }
+                        _ => gap(&mut gaps, "SORT_REFERENCE", n, "Ambiguous sort field"),
+                    }
+                }
+                continue;
+            }
             let kind = match xml.tag(n) {
                 "color" => Some(EdgeKind::MarkColor),
                 "size" => Some(EdgeKind::MarkSize),
@@ -289,6 +466,7 @@ impl Graph {
                 "detail" | "lod" => Some(EdgeKind::MarkDetail),
                 "shape" => Some(EdgeKind::MarkShape),
                 "tooltip" => Some(EdgeKind::MarkTooltip),
+                "wedge-size" => Some(EdgeKind::MarkWedgeSize),
                 _ => None,
             };
             let Some(kind) = kind.filter(|_| xml.ancestor(n, "encodings").is_some()) else {
@@ -305,8 +483,8 @@ impl Graph {
             };
             match formula::analyze(column) {
                 Ok(a) if a.references.len() == 1 => {
-                    if let Some(fid) = resolver.reference(Some(sheet), None, &a.references[0]) {
-                        raw.push((field_ref(fid), NodeRef::new(NodeKind::Worksheet, sid), kind));
+                    if let Some(field) = resolver.reference(Some(sheet), None, &a.references[0]) {
+                        raw.push((field, NodeRef::new(NodeKind::Worksheet, sid), kind));
                     } else {
                         gap(
                             &mut gaps,
@@ -325,19 +503,27 @@ impl Graph {
             }
         }
         for (n, filter, owner) in &filters {
-            let Some(owner) = owner else {
-                gap(&mut gaps, "FILTER_SCOPE", *n, "Filter owner is unresolved");
-                continue;
-            };
-            let (field_kind, owner_kind) = if filter.kind == NodeKind::WorksheetFilter {
-                (EdgeKind::WorksheetFilterField, EdgeKind::WorksheetFiltered)
-            } else {
-                (
+            let (field_kind, owner_kind) = match filter.kind {
+                NodeKind::WorksheetFilter => (
+                    EdgeKind::WorksheetFilterField,
+                    Some(EdgeKind::WorksheetFiltered),
+                ),
+                NodeKind::DatasourceFilter => (
                     EdgeKind::DatasourceFilterField,
-                    EdgeKind::DatasourceFiltered,
-                )
+                    Some(EdgeKind::DatasourceFiltered),
+                ),
+                NodeKind::ExtractFilter => (
+                    EdgeKind::ExtractFilterField,
+                    Some(EdgeKind::ExtractFiltered),
+                ),
+                NodeKind::SharedViewFilter => (EdgeKind::SharedViewFilterField, None),
+                _ => unreachable!("only filters are collected"),
             };
-            raw.push((*filter, *owner, owner_kind));
+            if let (Some(owner), Some(kind)) = (*owner, owner_kind) {
+                raw.push((*filter, owner, kind));
+            } else if filter.kind != NodeKind::SharedViewFilter {
+                gap(&mut gaps, "FILTER_SCOPE", *n, "Filter owner is unresolved");
+            }
             let Some(column) = xml.value(*n, "column") else {
                 gap(
                     &mut gaps,
@@ -350,13 +536,16 @@ impl Graph {
             match formula::analyze(column) {
                 Ok(a) if a.references.len() == 1 => {
                     let sheet = xml.ancestor(*n, "worksheet");
-                    let ds = if owner.kind == NodeKind::Datasource {
-                        Some(DatasourceId(owner.id))
-                    } else {
-                        None
-                    };
-                    if let Some(fid) = resolver.reference(sheet, ds, &a.references[0]) {
-                        raw.push((field_ref(fid), *filter, field_kind));
+                    let ds = (*owner)
+                        .filter(|owner| owner.kind == NodeKind::Datasource)
+                        .map(|owner| DatasourceId(owner.id))
+                        .or_else(|| {
+                            xml.ancestor(*n, "shared-view")
+                                .and_then(|view| xml.value(view, "name"))
+                                .and_then(|name| book.datasource_lookup.get(name).copied())
+                        });
+                    if let Some(field) = resolver.reference(sheet, ds, &a.references[0]) {
+                        raw.push((field, *filter, field_kind));
                     } else {
                         gap(
                             &mut gaps,
@@ -452,6 +641,49 @@ impl Graph {
         search_name.sort_unstable();
         gaps.sort();
         gaps.dedup();
+        for item in &mut gaps {
+            let Some(id) = item
+                .object
+                .strip_prefix("xml_node:")
+                .and_then(|id| id.parse::<u32>().ok())
+                .filter(|&id| (id as usize) < xml.nodes.len())
+            else {
+                continue;
+            };
+            let node = NodeId(id);
+            let mut context = Vec::new();
+            if let Some(sheet) = xml.ancestor(node, "worksheet")
+                && let Some(name) = xml.value(sheet, "name")
+            {
+                context.push(format!("worksheet={name}"));
+            } else if let Some(view) = xml.ancestor(node, "shared-view")
+                && let Some(name) = xml.value(view, "name")
+            {
+                context.push(format!("shared_view={name}"));
+            } else if let Some(datasource) = xml.ancestor(node, "datasource")
+                && let Some(name) = xml.value(datasource, "name")
+            {
+                context.push(format!("datasource={name}"));
+            }
+            context.push(format!("tag={}", xml.tag(node)));
+            if let Some(reference) = xml
+                .value(node, "column")
+                .or_else(|| xml.value(node, "name"))
+            {
+                context.push(format!(
+                    "reference={}",
+                    reference.chars().take(160).collect::<String>()
+                ));
+            } else if matches!(xml.tag(node), "rows" | "cols")
+                && let Ok(expression) = xml.text_content(node)
+            {
+                context.push(format!(
+                    "expression={}",
+                    expression.chars().take(160).collect::<String>()
+                ));
+            }
+            item.context = Some(context.join("; "));
+        }
         Ok(Self {
             input_sha256,
             source_build: book.source_build,
@@ -476,16 +708,21 @@ fn gap(gaps: &mut Vec<Gap>, code: &str, node: NodeId, detail: &str) {
         code: code.into(),
         object: format!("xml_node:{}", node.0),
         detail: detail.into(),
+        context: None,
     });
 }
-fn filter_node(xml: &crate::xml::Xml, n: NodeId, r: NodeRef) -> GraphNode {
+fn filter_node(xml: &crate::xml::Xml, n: NodeId, r: NodeRef, owner: Option<NodeRef>) -> GraphNode {
     let column = xml.value(n, "column").unwrap_or("");
     let class = xml.value(n, "class").unwrap_or("unknown");
     GraphNode {
         reference: r,
         name: column.into(),
         caption: format!("{class} filter: {column}"),
-        datasource: None,
+        datasource: owner.filter(|owner| owner.kind == NodeKind::Datasource),
+        worksheet: owner.filter(|owner| owner.kind == NodeKind::Worksheet),
+        formula: None,
+        data_type: None,
+        role: None,
     }
 }
 fn offsets(count: usize, ids: impl Iterator<Item = u32>) -> Vec<u32> {
@@ -498,29 +735,38 @@ fn offsets(count: usize, ids: impl Iterator<Item = u32>) -> Vec<u32> {
     }
     out
 }
-type Instances = BTreeMap<(NodeId, DatasourceId, String), BTreeSet<FieldId>>;
-fn instances(book: &Workbook) -> Instances {
+type LocalLookup = BTreeMap<(NodeId, DatasourceId, String), BTreeSet<NodeRef>>;
+type Instances = BTreeMap<(Option<NodeId>, DatasourceId, String), BTreeSet<NodeRef>>;
+fn instances(book: &Workbook, local_lookup: &LocalLookup) -> Instances {
     let xml = &book.xml;
     let mut out = Instances::new();
     for &n in &xml.semantic.column_instances {
-        let (Some(sheet), Some(scope), Some(name), Some(column)) = (
-            xml.ancestor(n, "worksheet"),
-            xml.ancestor(n, "datasource-dependencies"),
-            xml.value(n, "name"),
-            xml.value(n, "column"),
-        ) else {
+        let (Some(name), Some(column)) = (xml.value(n, "name"), xml.value(n, "column")) else {
             continue;
         };
-        let Some(&ds) = xml
-            .value(scope, "datasource")
-            .and_then(|s| book.datasource_lookup.get(s))
-        else {
+        let sheet = xml.ancestor(n, "worksheet");
+        let datasource_name = xml
+            .ancestor(n, "datasource-dependencies")
+            .and_then(|scope| xml.value(scope, "datasource"))
+            .or_else(|| {
+                xml.ancestor(n, "datasource")
+                    .and_then(|scope| xml.value(scope, "name"))
+            });
+        let Some(&ds) = datasource_name.and_then(|s| book.datasource_lookup.get(s)) else {
             continue;
         };
+        let mut targets = BTreeSet::new();
         if let Some(&field) = book.field_lookup[ds.0 as usize].get(column) {
+            targets.insert(field_ref(field));
+        } else if let Some(sheet) = sheet
+            && let Some(local) = local_lookup.get(&(sheet, ds, column.into()))
+        {
+            targets.extend(local.iter().copied());
+        }
+        if !targets.is_empty() {
             out.entry((sheet, ds, name.into()))
                 .or_default()
-                .insert(field);
+                .extend(targets);
         }
     }
     out
@@ -528,6 +774,7 @@ fn instances(book: &Workbook) -> Instances {
 struct Resolver<'a> {
     book: &'a Workbook,
     instances: &'a Instances,
+    local_lookup: &'a LocalLookup,
     sheet_sources: &'a BTreeMap<NodeId, BTreeSet<DatasourceId>>,
 }
 impl Resolver<'_> {
@@ -536,7 +783,7 @@ impl Resolver<'_> {
         sheet: Option<NodeId>,
         datasource: Option<DatasourceId>,
         r: &formula::Reference,
-    ) -> Option<FieldId> {
+    ) -> Option<NodeRef> {
         let ds = if let Some(name) = &r.datasource {
             Some(*self.book.datasource_lookup.get(name)?)
         } else {
@@ -556,12 +803,21 @@ impl Resolver<'_> {
         }
         found
     }
-    fn in_source(&self, sheet: Option<NodeId>, ds: DatasourceId, name: &str) -> Option<FieldId> {
+    fn in_source(&self, sheet: Option<NodeId>, ds: DatasourceId, name: &str) -> Option<NodeRef> {
         self.book.field_lookup[ds.0 as usize]
             .get(name)
             .copied()
+            .map(field_ref)
             .or_else(|| {
-                let ids = self.instances.get(&(sheet?, ds, name.into()))?;
+                let ids = self.local_lookup.get(&(sheet?, ds, name.into()))?;
+                if ids.len() == 1 {
+                    ids.iter().next().copied()
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                let ids = self.instances.get(&(sheet, ds, name.into()))?;
                 if ids.len() == 1 {
                     ids.iter().next().copied()
                 } else {

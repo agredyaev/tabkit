@@ -19,6 +19,9 @@ pub enum NodeKind {
     DatasourceFilter,
     Worksheet,
     Dashboard,
+    LocalField,
+    ExtractFilter,
+    SharedViewFilter,
 }
 
 impl NodeKind {
@@ -56,10 +59,16 @@ pub enum EdgeKind {
     MarkDetail,
     MarkShape,
     MarkTooltip,
+    MarkWedgeSize,
+    SortField,
+    SortUsing,
     WorksheetFilterField,
     WorksheetFiltered,
     DatasourceFilterField,
     DatasourceFiltered,
+    ExtractFilterField,
+    ExtractFiltered,
+    SharedViewFilterField,
     DatasourceUsed,
     SheetInDashboard,
 }
@@ -71,6 +80,14 @@ pub struct GraphNode {
     pub caption: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datasource: Option<NodeRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worksheet: Option<NodeRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -85,6 +102,8 @@ pub struct Gap {
     pub code: String,
     pub object: String,
     pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -98,7 +117,7 @@ pub struct Graph {
     pub input_sha256: String,
     pub source_build: Option<String>,
     nodes: Vec<GraphNode>,
-    bases: [usize; 7],
+    bases: [usize; 10],
     links: Vec<Link>,
     outgoing: Vec<u32>,
     incoming_order: Vec<u32>,
@@ -120,6 +139,19 @@ const EXCLUDED: &[&str] = &[
 impl Graph {
     pub fn count(&self) -> (usize, usize) {
         (self.nodes.len(), self.links.len())
+    }
+    pub fn gap_page(&self, offset: usize, limit: usize) -> Result<Value> {
+        require(
+            (1..=100).contains(&limit),
+            "LIMIT",
+            "Lineage page limit must be 1..100",
+        )?;
+        let total = self.gaps.len();
+        let end = offset.saturating_add(limit).min(total);
+        Ok(
+            json!({"items": &self.gaps[offset.min(total)..end], "total": total,
+            "next_offset": (end < total).then_some(end)}),
+        )
     }
     pub fn coverage(&self) -> Value {
         json!({"status": if self.gaps.is_empty() {"complete_for_v1_routes"} else {"partial"},

@@ -81,6 +81,11 @@ use uuid::Uuid;
     pub input:Option<String>,
     pub output:String,
 }
+#[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct LineageGaps {
+    pub snapshot_id:String,
+    #[serde(default)]pub offset:usize,
+    #[serde(default="page_limit")]pub limit:usize,
+}
 fn page_limit()->usize{
     100
 }
@@ -327,6 +332,7 @@ impl App{
             "workbook_lineage_find"=>self.lineage_find(parse(args)?),
             "workbook_lineage_neighbors"=>self.lineage_neighbors(parse(args)?),
             "workbook_lineage_impact"=>self.lineage_impact(parse(args)?),
+            "workbook_lineage_gaps"=>self.lineage_gaps(parse(args)?),
             "workbook_lineage_export"=>self.lineage_export(parse(args)?),
             "workbook_validate"=>{
                 let a:Input=parse(args)?;
@@ -482,6 +488,13 @@ impl App{
         let slot=self.lineage.lock().map_err(|_|Error::new("INTERNAL","Lineage mutex is poisoned"))?;
         let session=active_lineage(&slot,a.snapshot_id.as_deref().unwrap_or(""))?;
         self.write_lineage_export(&session.graph,&a.output)
+    }
+    fn lineage_gaps(&self,a:LineageGaps)->Result<Value>{
+        let slot=self.lineage.lock().map_err(|_|Error::new("INTERNAL","Lineage mutex is poisoned"))?;
+        let session=active_lineage(&slot,&a.snapshot_id)?;
+        let mut result=session.graph.gap_page(a.offset,a.limit)?;
+        result["snapshot_id"]=json!(a.snapshot_id);
+        Ok(result)
     }
     fn write_lineage_export(&self,graph:&Graph,output:&str)->Result<Value>{
         let(path,sha256,bytes)=self.ws.write_new_stream(output,self.cfg.limits.file_bytes,
