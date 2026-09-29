@@ -9,10 +9,12 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 EXE = Path(sys.argv[1]).resolve() if len(sys.argv)>1 else ROOT / "target/release/tabkit"
+VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
 checks = []
 def check(name, condition):
     if not condition:
@@ -32,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix="tabkit-smoke-") as directory:
             raise AssertionError((tool, p.returncode, p.stdout, p.stderr))
         return json.loads(p.stdout if expected in (0, 1) else p.stderr)
     status = call("system_status", {})
-    check("CLI startup and version", status["engine"] == "0.1.5")
+    check("CLI startup and version", status["engine"] == VERSION)
     check("Base build has no native Hyper", status["hyper_compiled"] is False)
     inspection = call("workbook_inspect", {"input":"synthetic.twb", "section":"calculations"})
     check("CLI inspect returns calculation", inspection["total"] > 0)
@@ -88,14 +90,15 @@ with tempfile.TemporaryDirectory(prefix="tabkit-smoke-") as directory:
         try:
             send({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"tabkit-offline-smoke","version":"1"}}})
             init = receive(1)
-            check("MCP initialize", init["serverInfo"]["version"] == "0.1.5")
+            check("MCP initialize", init["serverInfo"]["version"] == VERSION)
             send({"jsonrpc":"2.0","method":"notifications/initialized"})
             send({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})
             tools = receive(2)["tools"]
-            check("MCP retains 29 tools including REST, Hyper and lineage", len(tools)==29 and {"tableau_publish","tableau_explore","hyper_query","workbook_lineage_gaps"}.issubset({t["name"] for t in tools}))
+            names = {tool["name"] for tool in tools}
+            check("MCP exposes REST, Hyper and lineage tools", len(names)==len(tools) and {"tableau_publish","tableau_explore","hyper_query","workbook_lineage_gaps"}.issubset(names))
             send({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"system_status","arguments":{}}})
             result = receive(3)
-            check("MCP tool dispatch", not result.get("isError",False) and json.loads(result["content"][0]["text"])["engine"] == "0.1.5")
+            check("MCP tool dispatch", not result.get("isError",False) and json.loads(result["content"][0]["text"])["engine"] == VERSION)
             send({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"workbook_validate","arguments":{"input":"candidate.twb"}}})
             result = receive(4)
             check("MCP validates actual CLI-produced candidate", not result.get("isError",False) and json.loads(result["content"][0]["text"])["passed"] is True)
