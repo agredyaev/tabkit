@@ -39,5 +39,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
         run: |
-          mv dist/tabkit.exe dist/tabkit-windows-x64.exe
-          gh release upload "$RELEASE_TAG" dist/tabkit-windows-x64.exe --repo "$GITHUB_REPOSITORY"
+          gh release upload "$RELEASE_TAG" dist/tabkit-windows-x64.zip --repo "$GITHUB_REPOSITORY"

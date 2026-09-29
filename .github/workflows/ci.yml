@@ -35,9 +35,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cargo test --locked
-      - run: cargo build --release --locked
+      - name: Install pinned Hyper SDK
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $url = 'https://downloads.tableau.com/tssoftware//tableauhyperapi-cxx-windows-x86_64-release-main.0.0.26479.r96880f6a.zip'
+          Invoke-WebRequest $url -OutFile hyper-sdk.zip
+          $actual = (Get-FileHash hyper-sdk.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'd37f59511322c6060d24ac77a009e44819423ff85202d05a624e2dc64f856ff5') { throw 'Hyper SDK checksum mismatch' }
+          Expand-Archive hyper-sdk.zip -DestinationPath sdk
+          $sdk = (Get-ChildItem sdk -Directory | Select-Object -First 1).FullName
+          "HYPER_SDK_DIR=$sdk" >> $env:GITHUB_ENV
+          "$sdk/bin" >> $env:GITHUB_PATH
+      - run: cargo test --locked --features hyper
+      - run: cargo build --release --locked --features hyper
+      - name: Package Windows runtime
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/tabkit.exe dist/
+          Copy-Item "$env:HYPER_SDK_DIR/bin/tableauhyperapi.dll" dist/
+          Copy-Item "$env:HYPER_SDK_DIR/bin/hyper" dist/hyper -Recurse
+          Copy-Item LICENSE dist/TABKIT_LICENSE.txt
+          Copy-Item "$env:HYPER_SDK_DIR/LICENSE" dist/HYPER_API_LICENSE.txt
+          Copy-Item "$env:HYPER_SDK_DIR/NOTICES.txt" dist/HYPER_API_NOTICES.txt
+          Copy-Item "$env:HYPER_SDK_DIR/HYPER_API_OSS_disclosure.txt" dist/HYPER_API_OSS_disclosure.txt
+          Compress-Archive -Path dist/* -DestinationPath tabkit-windows-x64.zip
+          Expand-Archive tabkit-windows-x64.zip -DestinationPath smoke
+      - name: Smoke packaged CLI and MCP with a real extract
+        shell: pwsh
+        run: python scripts/hyper_smoke.py smoke/tabkit.exe "$env:HYPER_SDK_DIR" "$env:HYPER_SDK_DIR/examples/data/sample_extracts/superstore_sample_denormalized.hyper"
       - uses: actions/upload-artifact@v4
         with:
           name: tabkit-windows-x64
-          path: target/release/tabkit.exe
+          path: tabkit-windows-x64.zip
           if-no-files-found: error

@@ -300,7 +300,15 @@ impl Config {
             }
         };
 
-        let hyper = match a.hyper_runtime_directory {
+        #[cfg(feature = "hyper")]
+        let hyper_runtime_directory = a.hyper_runtime_directory.or_else(|| {
+            let runtime = std::env::current_exe().ok()?.parent()?.join("hyper");
+            runtime.join(if cfg!(windows) { "hyperd.exe" } else { "hyperd" })
+                .is_file().then_some(runtime)
+        });
+        #[cfg(not(feature = "hyper"))]
+        let hyper_runtime_directory = a.hyper_runtime_directory;
+        let hyper = match hyper_runtime_directory {
             None => None,
             Some(runtime_directory) => {
                 require(runtime_directory.is_absolute(), "CONFIG", "Hyper runtime path must be absolute")?;
