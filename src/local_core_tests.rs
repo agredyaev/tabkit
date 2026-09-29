@@ -290,7 +290,7 @@ fn assertion_report(dir:&Path,app:&App,source:&str,checks:Vec<Value>)->Value{
 }
 #[test]
 fn absent_protected_section_differs_from_present_empty_section(){
-    let without=GOOD.replace("  <windows />\n","");assert_ne!(without,GOOD);
+    let without=GOOD.replace("  <windows />","");assert_ne!(without,GOOD);
     let (dir,app)=setup(&without);std::fs::write(dir.path().join("base.twb"),&without).unwrap();
     let checks=vec![json!({"assert":"subtree_unchanged","baseline":"base.twb","section":"windows"})];
     assert_eq!(assertion_report(dir.path(),&app,&without,checks.clone())["passed"],true);
