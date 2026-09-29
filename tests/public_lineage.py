@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import pathlib
+import select
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 from collections import Counter
+from contextlib import contextmanager
 
 
 # These hashes pin the extracted TWB, not the transport ZIP.
@@ -31,6 +33,34 @@ GITHUB_BOOK = (
     "master/datasources/ts_web_requests/ts_web_requests_03.01.twb",
     "fa11eb92394e9f49cd451ded7528c729963438be1f00f86cc7e1f41707ed905a",
 )
+
+ROUTES = {
+    "ExecutiveSummary_17887725885850": (
+        [("field", "[Order Date]"),
+         ("field", "[Calculation_2589366273679360]", "Sample - Superstore"),
+         ("datasource_filter", "[Calculation_2589366273679360]", "Sample - Superstore"),
+         ("datasource", "Sample - Superstore"), ("worksheet", "Profit"),
+         ("dashboard", "Overview")],
+        ["calculation", "datasource_filter_field", "datasource_filtered",
+         "datasource_used", "sheet_in_dashboard"],
+    ),
+    "exttest": (
+        [("field", "[Order ID]"), ("field", "[Orders # (copy)_1519555718684745]"),
+         ("custom_encoding", "[Sample - Superstore].[usr:Orders # (copy)_1519555718684745:qk]"),
+         ("worksheet", "Sheet 9"), ("dashboard", "Overview dash")],
+        ["calculation", "custom_encoding_field", "custom_encoding_on_sheet",
+         "sheet_in_dashboard"],
+    ),
+    "VisualizeQuotaAttainmentforExecutivesinMultipleWays": (
+        [("field", "[Sales_Amount]"), ("field", "[Calculation_1075813527691289]"),
+         ("field", "[Calculation_1075813408002051]"),
+         ("custom_encoding", "[federated.0dh0elc0safk6319llyns0jx4gy4].[usr:Calculation_1075813408002051:qk]"),
+         ("worksheet", "Gauge "),
+         ("dashboard", "Visualize Quota Attainment for Executives in Multiple Ways")],
+        ["calculation", "calculation", "custom_encoding_field",
+         "custom_encoding_on_sheet", "sheet_in_dashboard"],
+    ),
+}
 
 
 def fetch(url, expected):
@@ -63,6 +93,155 @@ def count_xml(root):
         "parameter_control": sum(zone.get("type-v2", zone.get("type")) == "paramctrl" for zone in root.iter("zone")),
         "custom_encoding": len(root.findall("./worksheets/worksheet//encodings/custom")),
     }
+
+
+@contextmanager
+def mcp_process(binary, workspace):
+    process = subprocess.Popen([str(binary), "--workspace", str(workspace), "mcp"],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL)
+    try:
+        yield process
+    finally:
+        if not process.stdin.closed:
+            process.stdin.close()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+def check_route(binary, workspace, name, xml, graph):
+    if name not in ROUTES:
+        return
+    steps, kinds = ROUTES[name]
+
+    def one(step):
+        tag, value, *source = step
+        owner = next((node["reference"] for node in graph["nodes"]
+                      if node["reference"]["kind"] == "datasource"
+                      and source and node["name"] == source[0]), None)
+        matches = [node for node in graph["nodes"]
+                   if node["reference"]["kind"] == tag and node["name"] == value
+                   and (not source or node.get("datasource") == owner)]
+        assert len(matches) == 1, (name, tag, value, len(matches))
+        return matches[0]["reference"]
+
+    def formula(field, source=None):
+        matches = [column.find("calculation") for ds in xml.findall("./datasources/datasource")
+                   if source is None or ds.get("name") == source
+                   for column in ds.findall("./column") if column.get("name") == field]
+        assert len(matches) == 1 and matches[0] is not None, (name, field)
+        return matches[0].get("formula")
+
+    refs = [one(step) for step in steps]
+    route = [{"from": left, "to": right, "kind": kind}
+             for left, right, kind in zip(refs, refs[1:], kinds)]
+    action_edges = []
+    assert all(edge in graph["edges"] for edge in route), (name, route)
+    assert any(record.findtext("local-name") == steps[0][1]
+               for record in xml.iter("metadata-record")), (name, "source field")
+
+    if name == "ExecutiveSummary_17887725885850":
+        assert "[Order Date]" in formula(steps[1][1], steps[3][1])
+        source = next(ds for ds in xml.findall("./datasources/datasource")
+                      if ds.get("name") == steps[3][1])
+        assert any(f.get("column") == steps[1][1] for f in source.findall("./filter"))
+        sheet = next(s for s in xml.findall("./worksheets/worksheet")
+                     if s.get("name") == steps[4][1])
+        assert any(ds.get("name") == source.get("name")
+                   for ds in sheet.findall("./table/view/datasources/datasource"))
+    else:
+        assert steps[0][1] in formula(steps[1][1])
+        if name == "VisualizeQuotaAttainmentforExecutivesinMultipleWays":
+            assert steps[1][1] in formula(steps[2][1])
+        sheet = next(s for s in xml.findall("./worksheets/worksheet")
+                     if s.get("name") == steps[-2][1])
+        assert any(custom.get("column") == steps[-3][1]
+                   for custom in sheet.findall(".//encodings/custom"))
+    dashboard = next(d for d in xml.findall("./dashboards/dashboard")
+                     if d.get("name") == steps[-1][1])
+    assert any(zone.get("name") == steps[-2][1] for zone in dashboard.iter("zone"))
+    if name == "exttest":
+        action = next(a for a in xml.findall("./actions/edit-parameter-action")
+                      if a.get("caption") == "ParameterColorStart1")
+        parameters = {p.get("name"): p.get("value") for p in action.findall("./params/param")}
+        assert action.find("source").get("worksheet") == "retention"
+        assert parameters == {
+            "source-field": "[Sample - Superstore].[usr:Calculation_1519553562972165:qk]",
+            "target-parameter": "[Parameters].[ColorStart]",
+        }
+        action_ref = one(("action", action.get("name")))
+        action_edges = [
+            {"from": one(("field", "[Calculation_1519553562972165]")),
+             "to": action_ref, "kind": "action_input"},
+            {"from": one(("worksheet", "retention")),
+             "to": action_ref, "kind": "action_source"},
+            {"from": action_ref, "to": one(("field", "[ColorStart]")),
+             "kind": "action_target"},
+        ]
+        assert all(edge in graph["edges"] for edge in action_edges)
+
+    with mcp_process(binary, workspace) as process:
+        sequence = 0
+
+        def rpc(method, params):
+            nonlocal sequence
+            sequence += 1
+            process.stdin.write((json.dumps({"jsonrpc": "2.0", "id": sequence,
+                                             "method": method, "params": params}) + "\n").encode())
+            process.stdin.flush()
+            assert select.select([process.stdout], [], [], 10)[0], (name, method, "timeout")
+            reply = json.loads(process.stdout.readline())
+            assert reply.get("id") == sequence and "error" not in reply, (name, reply)
+            return reply["result"]
+
+        rpc("initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
+                           "clientInfo": {"name": "public-lineage", "version": "1"}})
+        process.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+        process.stdin.flush()
+
+        def tool(tool_name, args):
+            result = rpc("tools/call", {"name": tool_name, "arguments": args})
+            assert not result.get("isError"), (name, tool_name, result)
+            return json.loads(next(part["text"] for part in result["content"]
+                                   if part["type"] == "text"))
+
+        opened = tool("workbook_lineage_open", {"input": "book.twb"})
+        assert opened["input_sha256"] == graph["input_sha256"]
+        snapshot = opened["snapshot_id"]
+        for edge in route + action_edges:
+            offset = 0
+            while True:
+                page = tool("workbook_lineage_neighbors", {"snapshot_id": snapshot,
+                            "node": edge["from"], "direction": "downstream",
+                            "offset": offset, "limit": 100})
+                if any(item["edge"] == edge for item in page["items"]):
+                    break
+                offset = page["next_offset"]
+                assert offset is not None, (name, edge)
+        if action_edges:
+            detail = tool("workbook_lineage_details", {"snapshot_id": snapshot,
+                           "node": action_ref})
+            assert detail["details"]["source"]["worksheet"] == "retention"
+            assert {p["name"]: p["value"] for p in detail["details"]["parameters"]} == parameters
+        args = {"snapshot_id": snapshot, "from": refs[0],
+                "direction": "downstream", "limit": 100}
+        seen = set()
+        seen_edges = []
+        for _ in range(len(graph["edges"]) + 1):
+            page = tool("workbook_lineage_impact", args)
+            seen.update((node["node"]["reference"]["kind"],
+                         node["node"]["reference"]["id"]) for node in page["nodes"])
+            seen_edges.extend(page["edges"])
+            if page["done"]:
+                break
+            args = {"snapshot_id": snapshot, "cursor": page["cursor"], "limit": 100}
+        else:
+            raise AssertionError((name, "impact did not finish"))
+        assert (refs[-1]["kind"], refs[-1]["id"]) in seen, (name, "dashboard impact")
+        assert all(edge in seen_edges for edge in route), (name, "incomplete impact path")
 
 
 def check(binary, workspace, name, data):
@@ -126,6 +305,7 @@ def check(binary, workspace, name, data):
         assert all(gap["code"] == "UNSUPPORTED_CALCULATION_CLASS" or any(
             special in gap.get("context", "") for special in (":Measure Names", "Multiple Values")
         ) for gap in graph["gaps"])
+    check_route(binary, workspace, name, source, graph)
     print(f"{name}: {len(graph['nodes'])} nodes, {len(graph['edges'])} edges, {elapsed_ms:.1f} ms")
 
 
