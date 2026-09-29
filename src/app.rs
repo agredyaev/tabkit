@@ -69,6 +69,10 @@ use uuid::Uuid;
     #[serde(default)]pub offset:usize,
     #[serde(default="page_limit")]pub limit:usize,
 }
+#[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct LineageDetails {
+    pub snapshot_id:String,
+    pub node:NodeRef,
+}
 #[derive(Deserialize,JsonSchema)]#[serde(deny_unknown_fields)]pub struct LineageImpact {
     pub snapshot_id:String,
     pub from:Option<NodeRef>,
@@ -331,6 +335,7 @@ impl App{
             "workbook_lineage_open"=>self.lineage_open(parse(args)?),
             "workbook_lineage_find"=>self.lineage_find(parse(args)?),
             "workbook_lineage_neighbors"=>self.lineage_neighbors(parse(args)?),
+            "workbook_lineage_details"=>self.lineage_details(parse(args)?),
             "workbook_lineage_impact"=>self.lineage_impact(parse(args)?),
             "workbook_lineage_gaps"=>self.lineage_gaps(parse(args)?),
             "workbook_lineage_export"=>self.lineage_export(parse(args)?),
@@ -452,6 +457,13 @@ impl App{
         let slot=self.lineage.lock().map_err(|_|Error::new("INTERNAL","Lineage mutex is poisoned"))?;
         let session=active_lineage(&slot,&a.snapshot_id)?;
         let mut result=session.graph.neighbors(a.node,a.direction,a.offset,a.limit)?;
+        result["snapshot_id"]=json!(a.snapshot_id);
+        Ok(result)
+    }
+    fn lineage_details(&self,a:LineageDetails)->Result<Value>{
+        let slot=self.lineage.lock().map_err(|_|Error::new("INTERNAL","Lineage mutex is poisoned"))?;
+        let session=active_lineage(&slot,&a.snapshot_id)?;
+        let mut result=session.graph.details(a.node)?;
         result["snapshot_id"]=json!(a.snapshot_id);
         Ok(result)
     }

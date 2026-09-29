@@ -1,11 +1,13 @@
 use super::{EdgeKind, Gap, Graph, GraphNode, Link, NodeKind, NodeRef};
 use crate::{
-    error::{Error, Result, require},
+    error::{Result, require},
     formula,
     workbook::{DatasourceId, FieldId, Workbook},
     xml::NodeId,
 };
 use std::collections::{BTreeMap, BTreeSet};
+#[path = "extra.rs"]
+mod extra;
 
 impl Graph {
     pub fn build(book: Workbook, input_sha256: String) -> Result<Self> {
@@ -125,34 +127,8 @@ impl Graph {
                 }
             }
         }
-        let counts = [
-            book.fields.len(),
-            book.datasources.len(),
-            worksheet_filter_count,
-            datasource_filter_count,
-            book.worksheets.len(),
-            book.dashboards.len(),
-            local_definitions.len(),
-            extract_filter_count,
-            shared_view_filter_count,
-        ];
-        let mut bases = [0usize; 10];
-        for (i, count) in counts.into_iter().enumerate() {
-            require(
-                count <= u32::MAX as usize,
-                "LIMIT",
-                "Too many lineage nodes of one kind",
-            )?;
-            bases[i + 1] = bases[i]
-                .checked_add(count)
-                .ok_or_else(|| Error::new("LIMIT", "Lineage node count overflow"))?;
-        }
-        require(
-            bases[9] <= u32::MAX as usize,
-            "LIMIT",
-            "Too many lineage nodes",
-        )?;
-        let mut nodes = Vec::with_capacity(bases[9]);
+        let mut nodes = Vec::with_capacity(book.fields.len() + book.datasources.len() +
+            book.worksheets.len() + book.dashboards.len() + filters.len() + local_definitions.len());
         for (i, f) in book.fields.iter().enumerate() {
             nodes.push(GraphNode {
                 reference: NodeRef::new(NodeKind::Field, i),
@@ -597,6 +573,19 @@ impl Graph {
                 gap(&mut gaps, "DASHBOARD_ZONE", n, "Unresolved worksheet zone");
             }
         }
+        let mut details = vec![None; nodes.len()];
+        extra::build(&book, &resolver, &worksheet_ids, &dashboard_ids)
+            .finish(&mut nodes, &mut details, &mut raw, &mut gaps);
+        let mut bases = [0usize; super::NODE_KIND_COUNT + 1];
+        let mut last_kind = 0;
+        for (index, node) in nodes.iter().enumerate() {
+            let kind = node.reference.kind.index();
+            require(kind >= last_kind, "INTERNAL", "Lineage nodes are out of kind order")?;
+            while last_kind < kind { bases[last_kind + 1] = index; last_kind += 1; }
+            require(node.reference.id as usize == index - bases[kind], "INTERNAL", "Lineage node ID mismatch")?;
+        }
+        while last_kind < super::NODE_KIND_COUNT { bases[last_kind + 1] = nodes.len(); last_kind += 1; }
+        require(nodes.len() <= u32::MAX as usize, "LIMIT", "Too many lineage nodes")?;
         let mut links = Vec::with_capacity(raw.len());
         for (from, to, kind) in raw {
             let from = bases[from.kind.index()] + from.id as usize;
@@ -689,6 +678,7 @@ impl Graph {
             source_build: book.source_build,
             nodes,
             bases,
+            details,
             links,
             outgoing,
             incoming_order,
@@ -823,6 +813,16 @@ impl Resolver<'_> {
                 } else {
                     None
                 }
+            })
+            .or_else(|| {
+                let inner = name.strip_prefix('[')?.strip_suffix(']')?;
+                let (prefix, rest) = inner.split_once(':')?;
+                if !matches!(prefix, "none" | "usr") { return None; }
+                let (field, suffix) = rest.rsplit_once(':')?;
+                if !matches!(suffix, "nk" | "ok" | "qk") { return None; }
+                self.book.field_lookup[ds.0 as usize]
+                    .get(&format!("[{field}]"))
+                    .copied().map(field_ref)
             })
     }
 }

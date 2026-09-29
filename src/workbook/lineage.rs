@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 #[path = "lineage/build.rs"]
 mod build;
+const NODE_KIND_COUNT: usize = 24;
 
 #[derive(
     Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, JsonSchema,
@@ -22,6 +23,21 @@ pub enum NodeKind {
     LocalField,
     ExtractFilter,
     SharedViewFilter,
+    Connection,
+    PhysicalTable,
+    LogicalTable,
+    CustomSql,
+    InitialSql,
+    Join,
+    Relationship,
+    Set,
+    Group,
+    Action,
+    Tooltip,
+    ParameterControl,
+    Story,
+    StoryPoint,
+    TableCalculation,
 }
 
 impl NodeKind {
@@ -71,6 +87,37 @@ pub enum EdgeKind {
     SharedViewFilterField,
     DatasourceUsed,
     SheetInDashboard,
+    ConnectionInDatasource,
+    TableOnConnection,
+    PhysicalInLogical,
+    CustomSqlInLogical,
+    JoinInput,
+    JoinOutput,
+    LogicalInDatasource,
+    RelationshipEnd,
+    RelationshipKey,
+    FieldOrigin,
+    ExtractFieldOrigin,
+    ExtractInLogical,
+    ExtractInDatasource,
+    SqlRead,
+    InitialSqlOnConnection,
+    GroupInput,
+    GroupUse,
+    ActionSource,
+    ActionInput,
+    ActionTarget,
+    TooltipInput,
+    TooltipOnSheet,
+    TooltipSheet,
+    ControlParameter,
+    ControlOnDashboard,
+    StoryPointSheet,
+    StoryContains,
+    StoryOnDashboard,
+    TableCalculationInput,
+    TableCalculationOrder,
+    TableCalculationOnSheet,
 }
 
 #[derive(Clone, Serialize)]
@@ -117,7 +164,8 @@ pub struct Graph {
     pub input_sha256: String,
     pub source_build: Option<String>,
     nodes: Vec<GraphNode>,
-    bases: [usize; 10],
+    bases: [usize; NODE_KIND_COUNT + 1],
+    details: Vec<Option<Value>>,
     links: Vec<Link>,
     outgoing: Vec<u32>,
     incoming_order: Vec<u32>,
@@ -127,14 +175,7 @@ pub struct Graph {
     pub gaps: Vec<Gap>,
 }
 
-const EXCLUDED: &[&str] = &[
-    "actions",
-    "sets_and_groups",
-    "tooltip_expressions",
-    "parameter_controls",
-    "table_calculation_runtime",
-    "stories",
-];
+const EXCLUDED: &[&str] = &["table_calculation_runtime", "dynamic_sql_effects", "tableau_action_execution"];
 
 impl Graph {
     pub fn count(&self) -> (usize, usize) {
@@ -154,7 +195,7 @@ impl Graph {
         )
     }
     pub fn coverage(&self) -> Value {
-        json!({"status": if self.gaps.is_empty() {"complete_for_v1_routes"} else {"partial"},
+        json!({"status": if self.gaps.is_empty() {"complete_for_v2_routes"} else {"partial"},
             "gap_count": self.gaps.len(), "excluded_constructs": EXCLUDED})
     }
     pub fn node(&self, r: NodeRef) -> Result<&GraphNode> {
@@ -164,6 +205,10 @@ impl Graph {
             .get(begin + r.id as usize)
             .filter(|_| begin + (r.id as usize) < end)
             .ok_or_else(|| Error::new("TARGET_NOT_FOUND", "Unknown lineage node"))
+    }
+    pub fn details(&self, r: NodeRef) -> Result<Value> {
+        let index = self.index(r)?;
+        Ok(json!({"node": &self.nodes[index], "details": &self.details[index]}))
     }
     fn index(&self, r: NodeRef) -> Result<usize> {
         self.node(r)?;
@@ -269,7 +314,7 @@ impl Graph {
         self.links[index]
     }
     pub fn export(&self, writer: &mut dyn std::io::Write) -> Result<()> {
-        writer.write_all(b"{\"schema_version\":1,\"input_sha256\":")?;
+        writer.write_all(b"{\"schema_version\":2,\"input_sha256\":")?;
         serde_json::to_writer(&mut *writer, &self.input_sha256)?;
         writer.write_all(b",\"source_build\":")?;
         serde_json::to_writer(&mut *writer, &self.source_build)?;
@@ -282,7 +327,9 @@ impl Graph {
             }
             serde_json::to_writer(&mut *writer, node)?;
         }
-        writer.write_all(b"],\"edges\":[")?;
+        writer.write_all(b"],\"details\":")?;
+        serde_json::to_writer(&mut *writer, &self.details)?;
+        writer.write_all(b",\"edges\":[")?;
         for (i, &link) in self.links.iter().enumerate() {
             if i > 0 {
                 writer.write_all(b",")?;
@@ -361,7 +408,8 @@ impl ImpactCursor {
             nodes.push(json!({"node": graph.node(self.from)?, "depth": 0, "parent": Value::Null}));
             self.first_page = false;
         }
-        while edges.len() < limit && self.head < self.queue.len() {
+        let mut scanned = 0;
+        while scanned < limit && self.head < self.queue.len() {
             let owner = self.queue[self.head] as usize;
             let range = graph.adjacent(owner, self.direction);
             if self.next >= range.len() {
@@ -371,6 +419,8 @@ impl ImpactCursor {
             }
             let link = graph.link_at(range.start + self.next, self.direction);
             self.next += 1;
+            scanned += 1;
+            if link.kind == EdgeKind::RelationshipEnd { continue; }
             let other = if self.direction == Direction::Downstream {
                 link.to
             } else {

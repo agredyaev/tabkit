@@ -53,6 +53,94 @@ fn has(edges: &[Value], from: (&str, u64), to: (&str, u64), kind: &str) -> bool 
 }
 
 #[test]
+fn structured_source_and_ui_routes_have_details_without_xml() {
+    let source=r#"<workbook source-build='2025.3.1' xmlns:user='http://www.tableausoftware.com/xml/user'>
+      <datasources>
+        <datasource name='d'>
+          <named-connections><named-connection name='c'><connection class='postgres' one-time-sql='SELECT id FROM audit.events'/></named-connection></named-connections>
+          <column name='[id]' datatype='integer' role='dimension'/>
+          <column name='[calc]' datatype='integer' role='measure'><calculation class='tableau' formula='[id]'><table-calc ordering-type='Field' ordering-field='[d].[id]'><order field='[d].[id]'/><order field='[d].[id set]'/></table-calc></calculation></column>
+          <column name='[setcalc]' datatype='boolean' role='dimension'><calculation class='tableau' formula='[id set]'/></column>
+          <metadata-records><metadata-record class='column'><local-name>[id]</local-name><parent-name>[q]</parent-name><local-type>integer</local-type></metadata-record><metadata-record class='column'><local-name>[id]</local-name><parent-name>[ExtractAlias]</parent-name><local-type>integer</local-type></metadata-record></metadata-records>
+          <group name='[id set]' user:ui-builder='filter-group'><groupfilter function='level-members' level='[id]'/><groupfilter function='except' level='[id]'/></group>
+          <object-graph><objects>
+            <object id='orders' caption='Orders'><properties context=''><relation type='join' join='left'><clause type='join'><expression op='='><expression op='[id]'/><expression op='[id]'/></expression></clause><clause type='join'><expression op='&lt;'><expression op='[id]'/><expression op='[id]'/></expression></clause><relation type='text' name='q' connection='c'>WITH cte AS (SELECT id FROM public.orders) SELECT id FROM cte</relation><relation type='table' name='labels' table='[public].[labels]' connection='c'/></relation></properties><properties context='extract'><relation type='table' name='ExtractAlias' table='[Extract].[Extract]'/></properties></object>
+            <object id='lookup' caption='Lookup'><properties context=''><relation type='table' name='lookup' table='[public].[lookup]' connection='c'/></properties><properties context='extract'><relation type='table' name='ExtractAlias' table='[Extract].[Extract]'/></properties></object>
+          </objects><relationships><relationship><expression op='='><expression op='[id]'/><expression op='[id]'/></expression><first-end-point object-id='orders'/><second-end-point object-id='lookup'/></relationship></relationships></object-graph>
+        </datasource>
+        <datasource name='Parameters'><column name='[P]' datatype='integer' role='measure' param-domain-type='list' value='1'><calculation class='tableau' formula='1'/></column></datasource>
+      </datasources>
+      <worksheets><worksheet name='S'><table><view><filter class='categorical' column='[d].[id set]'/></view><panes><pane><add-in><type-settings><worksheet/></type-settings></add-in><encodings><color column='[d].[io:id set:nk]'/></encodings><manual-sort column='[d].[io:id set:nk]'/><customized-tooltip><formatted-text><run>&lt;[d].[id]&gt;</run><run>&lt;Sheet name=&quot;S&quot; filter=&quot;&lt;All Fields&gt;&quot;&gt;</run></formatted-text></customized-tooltip></pane></panes><rows>[d].[io:id set:nk]</rows></table></worksheet></worksheets>
+      <dashboards><dashboard name='D'><zones><zone name='S'/><zone type-v2='paramctrl' param='[Parameters].[P]' mode='compact'/><zone><flipboard><story-points><story-point id='1' caption='First' captured-sheet='S'/></story-points></flipboard></zone></zones></dashboard></dashboards>
+      <actions><edit-parameter-action name='a'><activation type='on-select'/><source type='sheet' worksheet='S'/><params><param name='source-field' value='[d].[id]'/><param name='target-parameter' value='[Parameters].[P]'/></params></edit-parameter-action><edit-group-action name='b'><activation type='on-select'/><source type='sheet' worksheet='S'/><params><param name='target-group' value='[d].[id set]'/></params></edit-group-action></actions>
+    </workbook>"#;
+    let (dir, app)=setup(source,Limits::default());
+    let opened=call(&app,"workbook_lineage_open",json!({"input":"in.twb"})).unwrap();
+    let snapshot=opened["snapshot_id"].as_str().unwrap();
+    let found=call(&app,"workbook_lineage_find",json!({"snapshot_id":snapshot,"prefix":"orders","kind":"logical_table"})).unwrap();
+    let node=found["items"][0]["reference"].clone();
+    let detail=call(&app,"workbook_lineage_details",json!({"snapshot_id":snapshot,"node":node})).unwrap();
+    assert_eq!(detail["details"]["object_id"],"orders");
+    let impact=call(&app,"workbook_lineage_impact",json!({"snapshot_id":snapshot,"from":node,"limit":100})).unwrap();
+    assert!(!impact["edges"].as_array().unwrap().iter().any(|e|e["kind"]=="relationship_end"));
+    let exported=call(&app,"workbook_lineage_export",json!({"snapshot_id":snapshot,"output":"graph.json"})).unwrap();
+    assert_eq!(exported["input_sha256"],opened["input_sha256"]);
+    let graph:Value=serde_json::from_slice(&std::fs::read(dir.path().join("graph.json")).unwrap()).unwrap();
+    assert_eq!(graph["schema_version"],2);
+    let kinds=graph["nodes"].as_array().unwrap().iter().map(|n|n["reference"]["kind"].as_str().unwrap()).collect::<std::collections::BTreeSet<_>>();
+    for kind in ["connection","physical_table","logical_table","custom_sql","initial_sql","join","relationship","set","action","tooltip","parameter_control","story","story_point","table_calculation"] {
+        assert!(kinds.contains(kind),"missing {kind}");
+    }
+    let edges=graph["edges"].as_array().unwrap();
+    for kind in ["sql_read","join_input","join_output","relationship_end","field_origin","extract_field_origin","extract_in_logical","group_input","action_input","action_target","tooltip_input","tooltip_sheet","control_parameter","story_contains","table_calculation_input","table_calculation_order"] {
+        assert!(edges.iter().any(|e|e["kind"]==kind),"missing {kind}");
+    }
+    assert_eq!(edges.iter().filter(|e|e["kind"]=="extract_in_logical").count(),2);
+    for kind in ["rows","mark_color","sort_field","worksheet_filter_field","group_use","table_calculation_order"] {
+        assert!(edges.iter().any(|e|e["from"]["kind"]=="set" && e["kind"]==kind),"set missing {kind}");
+    }
+    let join=graph["nodes"].as_array().unwrap().iter().position(|n|n["reference"]["kind"]=="join").unwrap();
+    assert_eq!(graph["details"][join]["condition"]["op"],"=");
+    assert_eq!(graph["details"][join]["conditions"].as_array().unwrap().len(),2);
+    let set=graph["nodes"].as_array().unwrap().iter().position(|n|n["reference"]["kind"]=="set").unwrap();
+    assert_eq!(graph["details"][set]["definition"].as_array().unwrap().len(),2);
+    assert!(!graph["gaps"].as_array().unwrap().iter().any(|g|["UNRESOLVED_REFERENCE","SHELF_REFERENCE","MARK_REFERENCE","FILTER_REFERENCE","COLUMN_BINDING","TABLE_CALC_ORDER"].contains(&g["code"].as_str().unwrap_or(""))));
+    assert!(!graph["nodes"].as_array().unwrap().iter().any(|n|n["reference"]["kind"]=="physical_table" && n["name"]=="cte"));
+}
+
+#[test]
+fn duplicate_set_names_are_ambiguous_and_do_not_create_view_links() {
+    let source="<workbook xmlns:user='http://www.tableausoftware.com/xml/user'><datasources><datasource name='d'><column name='[id]'/><group name='[S]' user:ui-builder='filter-group'/><group name='[S]' user:ui-builder='filter-group'/></datasource></datasources><worksheets><worksheet name='W'><table><view><datasources><datasource name='d'/></datasources></view><rows>[d].[io:S:nk]</rows></table></worksheet></worksheets></workbook>";
+    let (dir,app)=setup(source,Limits::default());
+    call(&app,"workbook_lineage_export",json!({"input":"in.twb","output":"graph.json"})).unwrap();
+    let graph:Value=serde_json::from_slice(&std::fs::read(dir.path().join("graph.json")).unwrap()).unwrap();
+    assert!(graph["gaps"].as_array().unwrap().iter().any(|g|g["code"]=="GROUP_REFERENCE"));
+    assert!(graph["gaps"].as_array().unwrap().iter().any(|g|g["code"]=="SHELF_REFERENCE"));
+    assert!(!graph["edges"].as_array().unwrap().iter().any(|e|e["from"]["kind"]=="set" && e["kind"]=="rows"));
+}
+
+#[test]
+fn overlapping_source_and_extract_aliases_do_not_claim_field_origin() {
+    let source="<workbook><datasources><datasource name='d'><column name='[id]'/><metadata-records><metadata-record class='column'><local-name>[id]</local-name><parent-name>[t]</parent-name></metadata-record></metadata-records><object-graph><objects><object id='o'><properties context=''><relation type='table' name='t' table='[public].[t]'/></properties><properties context='extract'><relation type='table' name='t' table='[Extract].[t]'/></properties></object></objects></object-graph></datasource></datasources></workbook>";
+    let (dir,app)=setup(source,Limits::default());
+    call(&app,"workbook_lineage_export",json!({"input":"in.twb","output":"graph.json"})).unwrap();
+    let graph:Value=serde_json::from_slice(&std::fs::read(dir.path().join("graph.json")).unwrap()).unwrap();
+    assert!(graph["gaps"].as_array().unwrap().iter().any(|g|g["code"]=="FIELD_ORIGIN"));
+    assert!(!graph["edges"].as_array().unwrap().iter().any(|e|matches!(e["kind"].as_str(),Some("field_origin"|"extract_field_origin"))));
+}
+
+#[test]
+fn lineage_api_rejects_unknown_nodes_and_stale_cursors() {
+    let (_dir,app)=setup(&source(),Limits::default());
+    let opened=call(&app,"workbook_lineage_open",json!({"input":"in.twb"})).unwrap();
+    let id=&opened["snapshot_id"];
+    assert_eq!(call(&app,"workbook_lineage_details",json!({"snapshot_id":id,"node":{"kind":"field","id":999999}})).unwrap_err().code,"TARGET_NOT_FOUND");
+    assert_eq!(call(&app,"workbook_lineage_neighbors",json!({"snapshot_id":id,"node":{"kind":"field","id":999999},"direction":"downstream"})).unwrap_err().code,"TARGET_NOT_FOUND");
+    assert_eq!(call(&app,"workbook_lineage_impact",json!({"snapshot_id":id,"from":{"kind":"field","id":0},"cursor":"bogus"})).unwrap_err().code,"INPUT");
+    assert_eq!(call(&app,"workbook_lineage_impact",json!({"snapshot_id":id,"cursor":"bogus"})).unwrap_err().code,"STALE_CURSOR");
+}
+
+#[test]
 fn lineage_routes_impact_and_snapshot_lifecycle() {
     let source = source();
     let (dir, app) = setup(&source, Limits::default());
@@ -226,7 +314,7 @@ fn extract_filter_is_not_reported_as_datasource_filter() {
         json!({"input":"in.twb","output":"graph.json"}),
     )
     .unwrap();
-    assert_eq!(result["coverage"]["status"], "complete_for_v1_routes");
+    assert_eq!(result["coverage"]["status"], "complete_for_v2_routes");
     let graph: Value =
         serde_json::from_slice(&std::fs::read(dir.path().join("graph.json")).unwrap()).unwrap();
     assert!(
