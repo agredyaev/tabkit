@@ -2,24 +2,36 @@ mod app;
 mod assertions;
 mod catalog;
 mod config;
+#[path = "workbook/edit.rs"]
 mod edit;
 mod error;
+#[path = "workbook/formula.rs"]
 mod formula;
 mod fs;
+#[path = "integrations/hyper.rs"]
 mod hyper;
 mod mcp;
+#[path = "integrations/oauth.rs"]
 mod oauth;
+#[path = "workbook/package.rs"]
 mod package;
+#[path = "workbook/patch.rs"]
 mod patch;
 #[cfg(any(feature = "hyper", test))]
 mod process_tree;
+#[path = "integrations/rest.rs"]
 mod rest;
+#[path = "workbook/scalar.rs"]
 mod scalar;
 #[cfg(any(feature = "hyper", test))]
+#[path = "integrations/sql.rs"]
 mod sql;
+#[path = "workbook/validation.rs"]
 mod validation;
 mod wire;
+#[path = "workbook/workbook.rs"]
 mod workbook;
+#[path = "workbook/xml.rs"]
 mod xml;
 use clap::{
     Parser,
@@ -165,21 +177,28 @@ fn print_json(v:&Value)->Result<()>{
 }
 
 #[cfg(test)]
+#[path = "../tests/unit/regression.rs"]
 mod regression;
 
 #[cfg(test)]
+#[path = "../tests/unit/properties.rs"]
 mod properties;
 #[cfg(test)]
+#[path = "../tests/unit/behavioral.rs"]
 mod behavioral;
 
 #[cfg(test)]
+#[path = "../tests/unit/edge_cases.rs"]
 mod edge_cases;
 
 #[cfg(test)]
+#[path = "../tests/unit/local_core_tests.rs"]
 mod local_core_tests;
 
 #[cfg(test)]
+#[path = "../tests/unit/xml_index_tests.rs"]
 mod xml_index_tests;
 
 #[cfg(test)]
+#[path = "../tests/unit/ownership_tests.rs"]
 mod ownership_tests;

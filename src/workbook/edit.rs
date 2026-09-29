@@ -107,7 +107,7 @@ struct Prepared {
     twb_sha256: String,
 }
 /// Borrowed convenience path for callers that intentionally retain the source.
-#[allow(dead_code)]
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn plan(input: &str, package_sha256: &str, book: &Workbook, changes: ChangeSet, cfg: &Config) -> Result<(Plan, Workbook)> {
     let before = book.snapshot()?;
     let before_checks = crate::validation::local(book);
@@ -116,6 +116,7 @@ pub fn plan(input: &str, package_sha256: &str, book: &Workbook, changes: ChangeS
     complete(input, before, before_checks, prepared, candidate, cfg)
 }
 /// Product path: preserve independently, then release the source before candidate admission.
+#[cfg(test)]
 pub fn plan_owned(input: &str, package_sha256: &str, book: Workbook, changes: ChangeSet, cfg: &Config) -> Result<(Plan, Workbook)> {
     let before = book.snapshot()?;
     let before_checks = crate::validation::local(&book);
@@ -343,6 +344,7 @@ fn complete_prechecked(input:&str,p:Prepared,candidate_sha256:&str)->Result<Plan
         changes,twb_sha256,candidate_twb_sha256:candidate_sha256.into(),patches,delta,warnings,
         tableau_semantics:"not_run".into()})
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn complete(input: &str, before: BTreeMap<String,Value>, before_checks: crate::validation::LocalValidation,
     p: Prepared, candidate: (String,String), cfg: &Config) -> Result<(Plan, Workbook)> {
     let Prepared { changes, before_changed:_, expected, patches, mut warnings, twb_sha256 } = p;
@@ -484,6 +486,7 @@ fn categorical_fragment(book:&Workbook,group:NodeId,level:&str,values:&[String])
         Ok(out)
     }
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn reject_new_diagnostics(before_checks:&crate::validation::LocalValidation,after:&Workbook)->Result<()> {
     let mut counts=BTreeMap::new();
     let after_checks = crate::validation::local(after);
@@ -497,6 +500,7 @@ fn reject_new_diagnostics(before_checks:&crate::validation::LocalValidation,afte
     }
     Ok(())
 }
+#[cfg(any(test, feature = "dev-tools"))]
 fn verify_changed_copies(book:&Workbook,operations:&[Operation])->Result<()> {
     for op in operations {
         match op {

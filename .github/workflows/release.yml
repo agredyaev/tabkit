@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
 
 jobs:
   windows:
@@ -23,6 +23,7 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          target-branch: dev
       - if: steps.release.outputs.release_created == 'true'
         uses: actions/download-artifact@v4
         with:

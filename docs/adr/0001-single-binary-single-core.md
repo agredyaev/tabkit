@@ -26,7 +26,3 @@ The product needs CLI and MCP access to the same local/remote capabilities witho
 - [src/app.rs](../../src/app.rs)
 - [src/mcp.rs](../../src/mcp.rs)
 - [src/wire.rs](../../src/wire.rs)
-
-## Requirements
-
-M-001, M-002, M-003, W-007.

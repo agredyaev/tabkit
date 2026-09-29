@@ -23,11 +23,7 @@ Tableau workbook XML contains supported semantic objects plus unknown/vendor con
 
 ## Implementation
 
-- [src/edit.rs](../../src/edit.rs)
-- [src/patch.rs](../../src/patch.rs)
-- [src/workbook.rs](../../src/workbook.rs)
-- [src/xml.rs](../../src/xml.rs)
-
-## Requirements
-
-M-008–M-016, W-001, W-002, W-009.
+- [src/edit.rs](../../src/workbook/edit.rs)
+- [src/patch.rs](../../src/workbook/patch.rs)
+- [src/workbook.rs](../../src/workbook/workbook.rs)
+- [src/xml.rs](../../src/workbook/xml.rs)

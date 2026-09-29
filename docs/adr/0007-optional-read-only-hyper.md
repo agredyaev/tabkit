@@ -24,11 +24,7 @@ Hyper access requires Tableau's native SDK/runtime. It remains optional and read
 
 ## Implementation
 
-- [src/hyper.rs](../../src/hyper.rs)
-- [src/sql.rs](../../src/sql.rs)
-- [src/package.rs](../../src/package.rs)
+- [src/hyper.rs](../../src/integrations/hyper.rs)
+- [src/sql.rs](../../src/integrations/sql.rs)
+- [src/package.rs](../../src/workbook/package.rs)
 - [Cargo.toml](../../Cargo.toml)
-
-## Requirements
-
-M-029, M-030, M-031, W-003.

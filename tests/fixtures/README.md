@@ -11,5 +11,4 @@ from a qualified Tableau 2025 installation. Some files are intentionally invalid
 - `layout-only.twb`: changed dashboard layout despite stable object inventory.
 - `duplicate-keys.json`: intentionally ambiguous JSON; a general JSON loader can hide this error.
 
-The regression functions are in `src/regression.rs`. Run `cargo test --locked` after
-resolving dependencies with Cargo. They have not been compiled or executed in this delivery.
+The regression functions are in `tests/unit/regression.rs`. Run `cargo test --locked`.

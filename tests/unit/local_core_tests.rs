@@ -4,7 +4,7 @@ use crate::{app::App,config::{Config,Limits,Policy},fs,package::Package,
 use serde_json::{json,Value};
 use std::{io::{Read,Write},path::Path};
 use tokio_util::sync::CancellationToken;
-const GOOD:&str=include_str!("../examples/synthetic.twb");
+const GOOD:&str=include_str!("../../examples/synthetic.twb");
 fn setup(source:&str)->(tempfile::TempDir,App){
     let dir=tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("in.twb"),source).unwrap();

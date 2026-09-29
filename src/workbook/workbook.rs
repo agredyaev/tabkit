@@ -1,5 +1,6 @@
+#[cfg(any(test, feature = "dev-tools"))]
+use crate::config::Limits;
 use crate::{
-    config::Limits,
     error::{
         Error,
         Result,
@@ -126,9 +127,11 @@ pub struct Workbook {
 }
 impl Workbook {
     pub fn into_xml(self) -> Xml { self.xml }
+    #[cfg(any(test, feature = "dev-tools"))]
     pub fn parse(bytes: Vec<u8>, limits: &Limits) -> Result<Self> {
         Self::from_xml(Xml::parse(bytes, limits)?)
     }
+    #[cfg(any(test, feature = "dev-tools"))]
     pub(crate) fn parse_with_sha256(bytes: Vec<u8>, limits: &Limits, sha256: String) -> Result<Self> {
         Self::from_xml(Xml::parse_with_sha256(bytes, limits, sha256)?)
     }
@@ -473,6 +476,7 @@ impl Workbook {
     }
     /// Refuse changes requiring a worksheet dependency rewrite that v1 does not implement.
     /// This is an edit-admission rule, not an assertion about every valid Tableau XML form.
+    #[cfg(any(test, feature = "dev-tools"))]
     pub fn require_calculation_dependencies(&self, changed: &[FieldId]) -> Result<()> {
         let overrides:Vec<Option<Vec<FieldId>>>=std::iter::repeat_with(||None).take(self.fields.len()).collect();
         self.require_calculation_dependencies_edges(changed,&self.edges,&self.ref_offsets,&overrides)

@@ -10,27 +10,27 @@ pub mod config;
 pub mod fs;
 #[path="../../src/wire.rs"]
 pub mod wire;
-#[path="../../src/xml.rs"]
+#[path="../../src/workbook/xml.rs"]
 pub mod xml;
-#[path="../../src/scalar.rs"]
+#[path="../../src/workbook/scalar.rs"]
 pub mod scalar;
-#[path="../../src/formula.rs"]
+#[path="../../src/workbook/formula.rs"]
 pub mod formula;
-#[path="../../src/patch.rs"]
+#[path="../../src/workbook/patch.rs"]
 pub mod patch;
-#[path="../../src/workbook.rs"]
+#[path="../../src/workbook/workbook.rs"]
 pub mod workbook;
-#[path="../../src/validation.rs"]
+#[path="../../src/workbook/validation.rs"]
 pub mod validation;
-#[path="../../src/edit.rs"]
+#[path="../../src/workbook/edit.rs"]
 pub mod edit;
-#[path="../../src/package.rs"]
+#[path="../../src/workbook/package.rs"]
 pub mod package;
-#[path="../../src/sql.rs"]
+#[path="../../src/integrations/sql.rs"]
 pub mod sql;
-#[path="../../src/oauth.rs"]
+#[path="../../src/integrations/oauth.rs"]
 pub mod oauth;
-#[path="../../src/rest.rs"]
+#[path="../../src/integrations/rest.rs"]
 pub mod rest;
 
 pub fn callback(request: &str) -> error::Result<zeroize::Zeroizing<String>> {

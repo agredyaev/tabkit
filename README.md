@@ -1,59 +1,33 @@
-# tabkit 0.1.5 — tested local implementation
+# tabkit
 
-Base release built on this Mac (arm64, Rust/cargo 1.98.1).
-73 Rust tests passed, including nine generated properties (1,024 cases each).
-16 executable CLI/MCP smoke, 28 HTTPS REST and 22 full OAuth/PKCE fixture checks passed.
-Nine AddressSanitizer/libFuzzer targets have successful final runs: eight x60 seconds and SQL x180 seconds after repair (3,072,517 executions). Earlier failed runs are retained.
-This is not yet a live Tableau/Hyper/Quick qualification.
+`tabkit` is a Rust CLI and MCP server for working with Tableau 2025 workbooks. It reads `.twb` and `.twbx` files from a chosen workspace, exposes their known structure, and makes supported edits through a reviewable plan. The CLI and MCP server use the same tools.
 
-## Reproduce
+## What it does
 
-    cargo check --all-targets --locked
-    cargo test --locked
-    cargo build --release --locked
-    python3 scripts/smoke.py
+- Inspect fields, calculations, parameters, filters, sheets, dependencies, and package contents.
+- Validate known workbook rules, compare workbooks, and run declarative assertions.
+- Plan and apply typed calculation, parameter, and filter edits to a **new** workbook file while preserving unrelated content.
+- Optionally connect to Tableau REST for discovery, download, and explicitly approved publishing.
+- Optionally inspect Hyper extracts with the native SDK; the default build needs no Hyper runtime.
 
-CLI startup arguments precede the subcommand; --workspace is required.
-Executable: target/release/tabkit
-Independent MCP client checked initialize, 23 tools, tool calls and clean EOF.
-A smoke-detected SDK identity bug was corrected; server identifies as tabkit 0.1.5.
+## Try it locally
 
-## Changes
+Requires Rust 1.88 or newer. The workspace must already exist and be given as an absolute path.
 
-- Invalid reqwest form feature removed; .form() API retained.
-- clap retained with smaller feature set, valid required workspace argument.
-- SQL parser is optional for the production Hyper feature, present for dev tests.
-- Generic SELECT and HyperScalar contracts retained.
-- One flate2 Rust ZIP backend, no Zopfli; TWBX preservation tested.
-- Narrow SHA-256 hex helper; hex dependency and unused Tokio signal removed.
-- Base normal/build dependency tree: 157 to 144 package+version entries.
-- 401 invalidates cached Tableau session; current request is never replayed.
-- Browser launcher cannot inherit MCP stdin/stdout.
-- Exact OAuth discovery issuer, strict callback state/duplicates/path/framing, bounded deadlines.
-- Existing OAuth and explicit PAT fallback remain.
+```sh
+cargo build --release --locked
+./target/release/tabkit --workspace "$(pwd)/examples" inspect synthetic.twb
+./target/release/tabkit --workspace "$(pwd)/examples" validate synthetic.twb
+```
 
-## Testing additions in 0.1.5
+On Windows, run `target\release\tabkit.exe` with an absolute Windows workspace path. Run `tabkit --workspace <absolute-path> tools` to see the available tools and their JSON schemas. Startup options go before the subcommand.
 
-See TESTING.md and reports/testing-0.1.5/summary.json for actual runs, fixtures, fuzz replay and fault-injection results.
-Three defects were reproduced and fixed: malformed preservation ranges, JSON numeric round-trip drift and SQL nested-function admission resource exhaustion. All have regressions; a separate SQL comment-oracle issue was corrected in the harness.
-`proptest` is dev-only; libFuzzer lives in a separate development workspace. No end-user runtime was added.
+To use MCP, configure your client to launch `tabkit --workspace <absolute-path> mcp` over stdio. See the [MCP configuration examples](examples/quick-mcp.example.json) for Tableau OAuth and [PAT](examples/quick-mcp-pat.example.json). For local workbook work, Tableau credentials are unnecessary.
 
-## Historical 0.1.4 evidence and remaining limitations
+For edits, copy a workbook into a separate workspace, inspect it, then call `workbook_plan` and `workbook_apply` with reviewed JSON arguments. See the [plan](examples/plan.json) and [apply](examples/apply.template.json) examples. The source workbook is never overwritten.
 
-reports/remote-stage.json, test-final.log, check-final.log, build-release.log,
-smoke.json, dependency-change.json, clippy.log and compiled-source-manifest.json.
-Clippy exits 0 with 15 remaining suggestions; not a zero-warning lint acceptance.
-No rustfmt check or Rust 1.88 execution; no actual corporate auth, Tableau,
-native Hyper, Amazon Quick UI or Windows/Linux build was run.
+## Scope
 
-No Quick configuration changes, real credential reads or live Tableau publications.
-Base runtime needs no Python; Python is used by developer smoke only.
-The Hyper build needs the official SDK/library/runtime and has not been built.
-PAT supplied via a Quick env setting is stored in that setting; keep secret out of argv.
-Next: read-only real Tableau access, real 2025 book corpus, explicit test project
-publish, native Hyper lifecycle, then actual Quick integration.
+Local validation checks XML and the Tableau structures `tabkit` understands; it does not execute Tableau or prove full workbook semantics. Unsupported edit shapes are rejected. Publishing is disabled unless explicitly enabled at startup. Live Tableau, Amazon Quick Desktop, and native Hyper integration still require environment qualification.
 
-## Requirements and architecture
-
-- [MoSCoW requirements registry](docs/requirements/REQUIREMENTS.md)
-- [Architecture Decision Records](docs/adr/README.md)
+Run `cargo test --locked` for the local test suite. See the [architecture decisions](docs/adr/README.md) for the supported scope.

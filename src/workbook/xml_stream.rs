@@ -45,6 +45,7 @@ pub(super) fn parse(bytes:Vec<u8>,limits:&Limits)->Result<Xml>{
     })?;
     result.sha256=sha256;result.text=text;Ok(result)
 }
+#[cfg(any(test, feature = "dev-tools"))]
 pub(super) fn parse_with_sha256(bytes:Vec<u8>,limits:&Limits,sha256:String)->Result<Xml>{
     require(bytes.len() as u64<=limits.xml_bytes&&bytes.len()<=u32::MAX as usize,
         "LIMIT","TWB is too large")?;

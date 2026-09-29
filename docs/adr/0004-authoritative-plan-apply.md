@@ -23,11 +23,7 @@ Plans are review artifacts, not authority to execute arbitrary stored byte patch
 
 ## Implementation
 
-- [src/edit.rs](../../src/edit.rs)
+- [src/edit.rs](../../src/workbook/edit.rs)
 - [src/app.rs](../../src/app.rs)
-- [src/package.rs](../../src/package.rs)
-- [src/patch.rs](../../src/patch.rs)
-
-## Requirements
-
-M-017, M-018, M-019.
+- [src/package.rs](../../src/workbook/package.rs)
+- [src/patch.rs](../../src/workbook/patch.rs)

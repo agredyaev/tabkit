@@ -4,7 +4,7 @@ use crate::{
         Result,
         require
     },
-    fs::{digest_hex, sha256},
+    fs::digest_hex,
     xml::Span
 };
 use ring::digest::{Context, SHA256};
@@ -29,8 +29,9 @@ pub struct Delta {
     pub after: serde_json::Value,
 }
 /// Sorted, non-overlapping spans; copy unchanged runs once (linear, not repeated inserts).
+#[cfg(any(test, feature = "dev-tools"))]
 pub fn apply(input: &str, expected_hash: &str, patches: &[Patch], max: u64) -> Result<String> {
-    require(sha256(input.as_bytes()) == expected_hash, "STALE_BASE", "TWB hash changed")?;
+    require(crate::fs::sha256(input.as_bytes()) == expected_hash, "STALE_BASE", "TWB hash changed")?;
     Ok(apply_admitted(input, patches, max)?.0)
 }
 fn admitted_layout<'a>(input:&str,patches:&'a [Patch],max:u64)->Result<(Vec<&'a Patch>,usize)> {

@@ -51,7 +51,7 @@ fn config() -> Config {
         hyper: None,
     }
 }
-const GOOD: &str = include_str!("../examples/synthetic.twb");
+const GOOD: &str = include_str!("../../examples/synthetic.twb");
 
 proptest! {
     #[test]

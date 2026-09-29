@@ -26,9 +26,5 @@ The product needs enough Tableau REST capability to discover, inspect, download,
 ## Implementation
 
 - [src/app.rs](../../src/app.rs)
-- [src/rest.rs](../../src/rest.rs)
+- [src/rest.rs](../../src/integrations/rest.rs)
 - [src/fs.rs](../../src/fs.rs)
-
-## Requirements
-
-M-022, M-026, M-027, M-028, W-004.

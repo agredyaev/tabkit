@@ -2,7 +2,7 @@
 use crate::{config::{Config, Limits, Policy}, edit::{self, ChangeSet, Operation}, fs,
     workbook::{Workbook, FieldId}};
 use serde_json::json;
-const GOOD: &str = include_str!("../examples/synthetic.twb");
+const GOOD: &str = include_str!("../../examples/synthetic.twb");
 fn cfg() -> Config { Config { workspace: Default::default(), limits: Limits::default(),
     policy: Policy { allow_unverified_formula_edits: true, ..Default::default() }, tableau: None, hyper: None } }
 #[test]

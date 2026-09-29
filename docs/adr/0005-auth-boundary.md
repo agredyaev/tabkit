@@ -25,11 +25,7 @@ The product needs interactive corporate authentication and a non-browser fallbac
 
 ## Implementation
 
-- [src/oauth.rs](../../src/oauth.rs)
-- [src/rest.rs](../../src/rest.rs)
+- [src/oauth.rs](../../src/integrations/oauth.rs)
+- [src/rest.rs](../../src/integrations/rest.rs)
 - [src/config.rs](../../src/config.rs)
 - [src/app.rs](../../src/app.rs)
-
-## Requirements
-
-M-023, M-024, M-025, W-005.

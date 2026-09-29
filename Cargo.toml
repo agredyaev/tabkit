@@ -9,6 +9,7 @@ build = "build.rs"
 
 [features]
 default = []
+dev-tools = []
 # The native SDK is only required when this feature is built.
 hyper = ["dep:cc", "dep:sqlparser"]
 

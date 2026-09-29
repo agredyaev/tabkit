@@ -4,11 +4,11 @@ use crate::{app::App,config::{Config,Limits,Policy,TableauConfig,TableauAuth,OAu
     fs,patch,validation::{self,Status},wire,workbook::{Workbook,FieldId},xml::{Xml,NodeId,Span}};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
-const GOOD:&str=include_str!("../examples/synthetic.twb");
-const NEW_REF:&str=include_str!("../tests/fixtures/new-reference.before.twb");
-const INVALID_PARAM:&str=include_str!("../tests/fixtures/invalid-parameter.twb");
-const BAD_REFERENCE:&str=include_str!("../tests/fixtures/known-local-error.twb");
-const INLINE:&str=include_str!("../tests/fixtures/inline-calculation.twb");
+const GOOD:&str=include_str!("../../examples/synthetic.twb");
+const NEW_REF:&str=include_str!("../fixtures/new-reference.before.twb");
+const INVALID_PARAM:&str=include_str!("../fixtures/invalid-parameter.twb");
+const BAD_REFERENCE:&str=include_str!("../fixtures/known-local-error.twb");
+const INLINE:&str=include_str!("../fixtures/inline-calculation.twb");
 fn cfg(path:&std::path::Path)->Config {
     Config{workspace:path.canonicalize().unwrap(),limits:Limits::default(),
         policy:Policy{allow_unverified_formula_edits:true,..Default::default()},tableau:None,hyper:None}

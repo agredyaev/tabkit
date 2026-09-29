@@ -7,11 +7,11 @@ import hashlib,json,os,pathlib,shutil,subprocess,tempfile
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 REPORT=ROOT/'reports/testing-0.1.5/mutations';REPORT.mkdir(parents=True,exist_ok=True)
 MUTANTS=[
- ('stale-source','src/edit.rs','require(changes.input_sha256 == package_sha256,','require(true,','regression::stale_input_hash_is_rejected'),
- ('dependency-closure','src/edit.rs','after.require_calculation_dependencies(&changed_calculations)?;','let _ = &changed_calculations;','regression::new_reference_missing_from_sheet_is_refused'),
+ ('stale-source','src/workbook/edit.rs','require(changes.input_sha256 == package_sha256,','require(true,','regression::stale_input_hash_is_rejected'),
+ ('dependency-closure','src/workbook/edit.rs','after.require_calculation_dependencies(&changed_calculations)?;','let _ = &changed_calculations;','regression::new_reference_missing_from_sheet_is_refused'),
  ('plan-integrity','src/app.rs','require(supplied==rebuilt,','require(true,','behavioral::tampered_patches_are_recomputed_even_with_new_external_hash'),
  ('duplicate-json','src/wire.rs','if !keys.insert(key){return Err(de::Error::custom("duplicate JSON object key"));}','keys.insert(key);','regression::lexical_admission_rejects_decoded_duplicate_keys'),
- ('patch-budget','src/patch.rs','require(length <= max && length <= usize::MAX as u64,','require(true,','regression::patch_budget_checked_before_candidate_allocation'),
+ ('patch-budget','src/workbook/patch.rs','require(length <= max && length <= usize::MAX as u64,','require(true,','regression::patch_budget_checked_before_candidate_allocation'),
  ('both-output-guards','src/fs.rs','require(!path.exists(), "OUTPUT_EXISTS", "Output exists; choose a new candidate path")?;','// fault injection: admission guard removed','behavioral::apply_refuses_to_replace_existing_output'),
  ('output-no-clobber','src/fs.rs','require(!path.exists(), "OUTPUT_EXISTS", "Output exists; choose a new candidate path")?;','// fault injection: premature admission of an existing file','behavioral::apply_refuses_to_replace_existing_output'),
 ]
@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='tabkit-mutants-') as td:
     for name,path,old,new,test in MUTANTS:
         target=work/path;original=target.read_text()
         if original.count(old)!=1:raise AssertionError('Mutation site changed: '+name)
-        package=work/'src/package.rs';package_original=package.read_text()
+        package=work/'src/workbook/package.rs';package_original=package.read_text()
         try:
             target.write_text(original.replace(old,new,1))
             if name=='both-output-guards':

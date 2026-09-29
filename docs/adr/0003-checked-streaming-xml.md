@@ -25,13 +25,9 @@ The original DOM-style admission retained too much memory and performed excessiv
 
 ## Implementation
 
-- [src/xml_stream.rs](../../src/xml_stream.rs)
-- [src/xml_fast.rs](../../src/xml_fast.rs)
-- [src/xml.rs](../../src/xml.rs)
-- [src/xml_attrs.rs](../../src/xml_attrs.rs)
-- [src/xml_index_tests.rs](../../src/xml_index_tests.rs)
-- [src/ownership_tests.rs](../../src/ownership_tests.rs)
-
-## Requirements
-
-M-008, M-009, M-019, M-032–M-035.
+- [src/xml_stream.rs](../../src/workbook/xml_stream.rs)
+- [src/xml_fast.rs](../../src/workbook/xml_fast.rs)
+- [src/xml.rs](../../src/workbook/xml.rs)
+- [src/xml_attrs.rs](../../src/workbook/xml_attrs.rs)
+- [tests/unit/xml_index_tests.rs](../../tests/unit/xml_index_tests.rs)
+- [tests/unit/ownership_tests.rs](../../tests/unit/ownership_tests.rs)

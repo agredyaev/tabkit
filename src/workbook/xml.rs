@@ -118,6 +118,7 @@ impl Xml {
     pub fn parse(bytes: Vec<u8>, limits: &Limits) -> Result<Self> {
         stream::parse(bytes, limits)
     }
+    #[cfg(any(test, feature = "dev-tools"))]
     pub(crate) fn parse_with_sha256(bytes: Vec<u8>, limits: &Limits, sha256: String) -> Result<Self> {
         stream::parse_with_sha256(bytes, limits, sha256)
     }
@@ -297,7 +298,7 @@ fn check_encoding_declaration(text:&str)->Result<()> {
 }
 
 #[cfg(test)]
-#[path = "xml_soa_tests.rs"]
+#[path = "../../tests/unit/xml_soa_tests.rs"]
 mod soa_tests;
 
 #[path = "xml_stream.rs"]
@@ -309,5 +310,5 @@ fn valid_xml_char(c: char) -> bool {
 }
 
 #[cfg(test)]
-#[path = "xml_stream_tests.rs"]
+#[path = "../../tests/unit/xml_stream_tests.rs"]
 mod stream_tests;

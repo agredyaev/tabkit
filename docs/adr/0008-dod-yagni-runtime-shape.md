@@ -24,11 +24,7 @@ Workbook/XML processing is dominated by sequential scans, identity lookup, depen
 
 ## Implementation
 
-- [src/workbook.rs](../../src/workbook.rs)
-- [src/xml.rs](../../src/xml.rs)
-- [src/xml_stream.rs](../../src/xml_stream.rs)
-- [src/edit.rs](../../src/edit.rs)
-
-## Requirements
-
-M-032, M-033, M-034, W-006, W-007.
+- [src/workbook.rs](../../src/workbook/workbook.rs)
+- [src/xml.rs](../../src/workbook/xml.rs)
+- [src/xml_stream.rs](../../src/workbook/xml_stream.rs)
+- [src/edit.rs](../../src/workbook/edit.rs)

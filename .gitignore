@@ -1,5 +1,9 @@
 /target/
 /.tabkit/
+/reports/
+/data/
+/DELIVERY_STATUS.json
+.DS_Store
 *.hyper
 *.twbx
 

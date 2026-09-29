@@ -9,7 +9,7 @@ use crate::{
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
-const GOOD: &str = include_str!("../examples/synthetic.twb");
+const GOOD: &str = include_str!("../../examples/synthetic.twb");
 fn setup(source: &str) -> (tempfile::TempDir, App) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("in.twb"), source).unwrap();
@@ -261,7 +261,7 @@ fn preservation_verifier_rejects_reversed_or_out_of_bounds_ranges() {
 
 #[test]
 fn fuzz_regression_json_number_roundtrip_is_stable() {
-    let input = include_bytes!("../tests/fuzz_regressions/json-number-roundtrip.json");
+    let input = include_bytes!("../fuzz_regressions/json-number-roundtrip.json");
     let value: Value = wire::decode(input, 1024).unwrap();
     let encoded = wire::encode(&value, 1024, false).unwrap();
     assert_eq!(wire::decode::<Value>(&encoded, 1024).unwrap(), value);
@@ -417,7 +417,7 @@ fn datetime_values_validate_calendar_and_clock_not_just_string_length() {
 
 #[test]
 fn fuzz_regression_nested_sql_rejects_without_speculative_explosion() {
-    let sql = include_str!("../tests/fuzz_regressions/sql-nested-function-resource.sql");
+    let sql = include_str!("../fuzz_regressions/sql-nested-function-resource.sql");
     let start = std::time::Instant::now();
     assert!(crate::sql::admit(sql, 10).is_err());
     // The same 112-byte input exceeded the 3s libFuzzer limit before the fix.

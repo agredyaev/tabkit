@@ -130,6 +130,7 @@ impl Package {
             _ => Err(Error::new("FORMAT", "Only .twb and .twbx are accepted")),
         }
     }
+    #[cfg(any(test, feature = "dev-tools"))]
     pub fn write_candidate(&self, output: &Path, candidate: &Xml, limits: &Limits) -> Result<String> {
         require(candidate.tag(crate::xml::NodeId(0)) == "workbook", "FORMAT", "Candidate must be an admitted workbook")?;
         self.write_candidate_bytes(output,candidate.text.as_bytes(),&candidate.sha256,limits)
