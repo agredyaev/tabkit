@@ -1,0 +1,23 @@
+name: Windows CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev]
+  workflow_call:
+
+jobs:
+  windows:
+    runs-on: windows-2025
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tabkit-windows-x64
+          path: target/release/tabkit.exe
+          if-no-files-found: error
