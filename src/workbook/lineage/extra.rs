@@ -1,13 +1,23 @@
 use super::{Resolver, gap};
 use crate::workbook::lineage::{EdgeKind, Gap, GraphNode, NODE_KIND_COUNT, NodeKind, NodeRef};
-use crate::{workbook::Workbook, xml::NodeId};
-use serde_json::Value;
+use crate::{workbook::Workbook, xml::{NodeId, Xml}};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 #[path = "source.rs"]
 mod source;
 #[path = "view.rs"]
 mod view;
+
+pub(super) fn element(xml: &Xml, node: NodeId, depth: usize) -> Value {
+    if depth == 32 {
+        return json!({"depth_limit":true});
+    }
+    json!({"tag":xml.tag(node),
+        "attributes":xml.attributes(node).map(|a|(a.name.to_owned(),a.value.to_owned())).collect::<BTreeMap<_,_>>(),
+        "text":xml.text_content(node).ok().filter(|s|!s.is_empty()),
+        "children":xml.children(node).map(|n|element(xml,n,depth+1)).collect::<Vec<_>>()})
+}
 
 pub(super) struct Extra {
     buckets: Vec<Vec<(GraphNode, Option<Value>)>>,

@@ -469,6 +469,17 @@ fn lineage_gaps_identify_the_affected_worksheet() {
 }
 
 #[test]
+fn datasource_filter_details_keep_the_member_condition() {
+    let source = "<workbook><datasources><datasource name='d'><column name='[id]'/><filter class='categorical' column='[id]'><groupfilter function='member' level='[id]' member='1'/></filter></datasource></datasources><worksheets><worksheet name='S'><table><view><datasources><datasource name='d'/></datasources></view></table></worksheet></worksheets></workbook>";
+    let (dir, app) = setup(source, Limits::default());
+    call(&app, "workbook_lineage_export", json!({"input":"in.twb","output":"graph.json"})).unwrap();
+    let graph: Value = serde_json::from_slice(&std::fs::read(dir.path().join("graph.json")).unwrap()).unwrap();
+    let filter = graph["nodes"].as_array().unwrap().iter().position(|n|n["reference"]["kind"]=="datasource_filter").unwrap();
+    assert_eq!(graph["details"][filter]["attributes"]["class"], "categorical");
+    assert_eq!(graph["details"][filter]["children"][0]["attributes"]["member"], "1");
+}
+
+#[test]
 fn unresolved_custom_encoding_and_manual_sort_are_reported() {
     let source = "<workbook><datasources><datasource name='d'><column name='[id]'/></datasource></datasources><worksheets><worksheet name='S'><table><view><datasources><datasource name='d'/></datasources><manual-sort column='[d].[missing]'/></view><panes><pane><encodings><custom custom-type-name='target' column='[d].[missing]'/></encodings></pane></panes></table></worksheet></worksheets></workbook>";
     let (_dir, app) = setup(source, Limits::default());

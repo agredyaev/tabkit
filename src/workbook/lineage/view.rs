@@ -1,4 +1,4 @@
-use super::{Extra, Resolver, source::descendants};
+use super::{Extra, Resolver, element, source::descendants};
 use crate::workbook::lineage::{EdgeKind, NodeKind, NodeRef};
 use crate::{
     formula,
@@ -756,15 +756,6 @@ fn group_definition(xml: &Xml, group: NodeId) -> Value {
             .map(|n| one(xml, n, 0))
             .collect::<Vec<_>>()
     )
-}
-fn element(xml: &Xml, node: NodeId, depth: usize) -> Value {
-    if depth == 32 {
-        return json!({"depth_limit":true});
-    }
-    json!({"tag":xml.tag(node),
-        "attributes":xml.attributes(node).map(|a|(a.name.to_owned(),a.value.to_owned())).collect::<BTreeMap<_,_>>(),
-        "text":xml.text_content(node).ok().filter(|s|!s.is_empty()),
-        "children":xml.children(node).map(|n|element(xml,n,depth+1)).collect::<Vec<_>>()})
 }
 fn add_story(
     xml: &Xml,

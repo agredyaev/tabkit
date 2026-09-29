@@ -601,6 +601,9 @@ impl Graph {
         }
         while last_kind < super::NODE_KIND_COUNT { bases[last_kind + 1] = nodes.len(); last_kind += 1; }
         require(nodes.len() <= u32::MAX as usize, "LIMIT", "Too many lineage nodes")?;
+        for (node, filter, _) in &filters {
+            details[bases[filter.kind.index()] + filter.id as usize] = Some(extra::element(xml, *node, 0));
+        }
         let mut links = Vec::with_capacity(raw.len());
         for (from, to, kind) in raw {
             let from = bases[from.kind.index()] + from.id as usize;

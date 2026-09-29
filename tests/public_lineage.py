@@ -147,7 +147,9 @@ def check_route(binary, workspace, name, xml, graph):
         assert "[Order Date]" in formula(steps[1][1], steps[3][1])
         source = next(ds for ds in xml.findall("./datasources/datasource")
                       if ds.get("name") == steps[3][1])
-        assert any(f.get("column") == steps[1][1] for f in source.findall("./filter"))
+        source_filter = next(f for f in source.findall("./filter")
+                             if f.get("column") == steps[1][1])
+        assert source_filter.find("groupfilter").get("member") == "true"
         sheet = next(s for s in xml.findall("./worksheets/worksheet")
                      if s.get("name") == steps[4][1])
         assert any(ds.get("name") == source.get("name")
@@ -211,6 +213,11 @@ def check_route(binary, workspace, name, xml, graph):
         opened = tool("workbook_lineage_open", {"input": "book.twb"})
         assert opened["input_sha256"] == graph["input_sha256"]
         snapshot = opened["snapshot_id"]
+        if name == "ExecutiveSummary_17887725885850":
+            detail = tool("workbook_lineage_details", {"snapshot_id": snapshot,
+                           "node": refs[2]})["details"]
+            assert detail["attributes"]["column"] == source_filter.get("column")
+            assert detail["children"][0]["attributes"]["member"] == source_filter.find("groupfilter").get("member")
         for edge in route + action_edges:
             offset = 0
             while True:
