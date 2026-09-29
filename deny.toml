@@ -1,0 +1,15 @@
+[graph]
+# Check the supported release target and the local development target.
+targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
+all-features = true
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "CDLA-Permissive-2.0"]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

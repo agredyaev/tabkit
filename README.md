@@ -1,6 +1,6 @@
 # tabkit
 
-[![Windows CI](https://img.shields.io/github/actions/workflow/status/agredyaev/tabkit/ci.yml?branch=dev&label=Windows%20CI&logo=githubactions&logoColor=white&style=for-the-badge)](https://github.com/agredyaev/tabkit/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/agredyaev/tabkit/ci.yml?branch=dev&label=CI&logo=githubactions&logoColor=white&style=for-the-badge)](https://github.com/agredyaev/tabkit/actions/workflows/ci.yml)
 [![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-EF6C00?logo=rust&logoColor=white&style=for-the-badge)](Cargo.toml)
 [![MIT License](https://img.shields.io/badge/License-MIT-3949AB?logo=opensourceinitiative&logoColor=white&style=for-the-badge)](LICENSE)
 [![Security policy](https://img.shields.io/badge/Security-Policy-00897B?style=for-the-badge)](SECURITY.md)

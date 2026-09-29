@@ -1,4 +1,4 @@
-name: Windows CI
+name: CI
 
 on:
   pull_request:
@@ -18,6 +18,16 @@ on:
   workflow_call:
 
 jobs:
+  deny:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --locked
+
   windows:
     runs-on: windows-2025
     permissions:
