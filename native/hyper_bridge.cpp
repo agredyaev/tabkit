@@ -2,6 +2,7 @@
 // Only SELECT queries reach executeQuery. The database argument is a disposable
 // snapshot created by Rust; we never connect the SDK to the user's source file.
 #include <hyperapi/hyperapi.hpp>
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -12,6 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace {
 class BoundedBuffer final : public std::streambuf {
@@ -45,30 +47,73 @@ void json_string(std::ostream& out, const std::string& s) {
     }
     out << '"';
 }
-std::string literal(const char* input) {
-    std::string s="'";
-    for (const char* p=input;*p;++p) { if (*p=='\'') s.push_back('\'');s.push_back(*p); }
-    return s+"'";
-}
 char* owned(const std::string& s) noexcept {
     char* p=static_cast<char*>(std::malloc(s.size()+1));
     if (p) std::memcpy(p,s.c_str(),s.size()+1);return p;
 }
+using MetadataRow = std::vector<std::string>;
+std::string metadata_json(const std::vector<std::pair<std::string,std::string>>& columns,
+                          const std::vector<MetadataRow>& rows,std::size_t max_rows,std::size_t max_bytes) {
+    BoundedBuffer buffer(max_bytes);std::ostream out(&buffer);
+    out.exceptions(std::ios::badbit | std::ios::failbit);
+    out << "{\"value_encoding\":\"hyper-text\",\"columns\":[";
+    for(std::size_t i=0;i<columns.size();++i) {
+        if(i)out<<',';out<<"{\"name\":";json_string(out,columns[i].first);
+        out<<",\"sql_type\":";json_string(out,columns[i].second);out<<'}';
+    }
+    out<<"],\"rows\":[";
+    for(std::size_t i=0;i<std::min(rows.size(),max_rows);++i) {
+        if(i)out<<',';out<<'[';
+        for(std::size_t j=0;j<rows[i].size();++j) {
+            if(j)out<<',';json_string(out,rows[i][j]);
+        }
+        out<<']';
+    }
+    out<<"],\"truncated\":"<<(rows.size()>max_rows?"true":"false")<<'}';
+    return buffer.data;
+}
+bool base_table(const hyperapi::Catalog& catalog,const std::string& schema,const std::string& table) {
+    for(const auto& name:catalog.getTableNames(hyperapi::SchemaName(schema)))
+        if(name.getName().getUnescaped()==table)return true;
+    return false;
+}
 std::string run(const char* runtime,const char* memory,const char* snapshot,const char* sql,
+                int mode,const char* selector_schema,const char* selector_table,
                 const char* const* schemas,const char* const* tables,std::size_t table_count,
                 std::size_t max_rows,std::size_t max_bytes) {
     hyperapi::HyperProcess hyper(std::string(runtime), hyperapi::Telemetry::DoNotSendUsageDataToTableau,
-                                "tabkit", {{"memory_limit",memory},{"log_file",""}});
+                                "tabkit", {{"memory_limit",memory}});
     hyperapi::Connection connection(hyper.getEndpoint(),std::string(snapshot),hyperapi::CreateMode::None);
+    const auto& catalog=connection.getCatalog();
+    // Hyper extracts need SDK catalog calls for metadata; information_schema is absent.
+    if(mode==1) {
+        std::vector<MetadataRow> rows;
+        for(const auto& schema:catalog.getSchemaNames()) {
+            const auto& name=schema.getName().getUnescaped();
+            if(name=="pg_catalog"||name=="information_schema")continue;
+            for(const auto& table:catalog.getTableNames(schema))
+                rows.push_back({name,table.getName().getUnescaped(),"BASE TABLE"});
+        }
+        std::sort(rows.begin(),rows.end());
+        return metadata_json({{"table_schema","TEXT"},{"table_name","TEXT"},{"table_type","TEXT"}},rows,max_rows,max_bytes);
+    }
+    if(mode==2) {
+        if(!base_table(catalog,selector_schema,selector_table))
+            throw std::invalid_argument("Only an existing base table can be inspected");
+        auto definition=catalog.getTableDefinition(hyperapi::TableName(hyperapi::SchemaName(selector_schema),hyperapi::Name(selector_table)));
+        std::vector<MetadataRow> rows;
+        for(const auto& column:definition.getColumns())
+            rows.push_back({column.getName().getUnescaped(),rendered(column.getType(),1024),
+                            column.getNullability()==hyperapi::Nullability::Nullable?"YES":"NO",
+                            std::to_string(rows.size()+1)});
+        return metadata_json({{"column_name","TEXT"},{"data_type","TEXT"},{"is_nullable","TEXT"},{"ordinal_position","BIGINT"}},rows,max_rows,max_bytes);
+    }
+    if(mode!=0)throw std::invalid_argument("Invalid operation");
     // Reject views and foreign tables before running the admitted query. A view
     // could hide operations not visible to the client's SQL AST visitor.
     for (std::size_t i=0;i<table_count;++i) {
-        const std::string check="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema="+
-            literal(schemas[i])+" AND table_name="+literal(tables[i])+" AND table_type='BASE TABLE'";
-        auto result=connection.executeQuery(check);long long count=-1;
-        for (const auto& row:result) count=row.get<long long>(0);
-        result.close();
-        if (count!=1) throw std::invalid_argument("Only an existing base table can be queried");
+        if(!base_table(catalog,schemas[i],tables[i]))
+            throw std::invalid_argument("Only an existing base table can be queried");
     }
     auto result=connection.executeQuery(std::string(sql));
     const auto& schema=result.getSchema();
@@ -100,11 +145,12 @@ std::string run(const char* runtime,const char* memory,const char* snapshot,cons
 }
 }
 extern "C" char* tabkit_hyper_query(const char* runtime,const char* memory,const char* snapshot,const char* sql,
+                                    int mode,const char* selector_schema,const char* selector_table,
                                     const char* const* schemas,const char* const* tables,std::size_t table_count,
                                     std::size_t max_rows,std::size_t max_bytes) noexcept {
-    if(!runtime||!memory||!snapshot||!sql||max_rows==0||max_bytes<4096)
+    if(!runtime||!memory||!snapshot||!sql||!selector_schema||!selector_table||max_rows==0||max_bytes<4096)
         return owned("{\"error\":\"HYPER_ARGUMENT\"}");
-    try {return owned(run(runtime,memory,snapshot,sql,schemas,tables,table_count,max_rows,max_bytes));}
+    try {return owned(run(runtime,memory,snapshot,sql,mode,selector_schema,selector_table,schemas,tables,table_count,max_rows,max_bytes));}
     catch(const std::invalid_argument&){return owned("{\"error\":\"HYPER_BASE_TABLE_REQUIRED\"}");}
     catch(const std::length_error&){return owned("{\"error\":\"HYPER_RESULT_LIMIT\"}");}
     catch(const std::exception&){return owned("{\"error\":\"HYPER_QUERY_FAILED\"}");}
