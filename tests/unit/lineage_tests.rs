@@ -7,7 +7,7 @@ use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 fn source() -> String {
-    let base = include_str!("../fixtures/new-reference.before.twb");
+    let base = include_str!("../fixtures/new-reference.before.twb").replace("\r\n", "\n");
     let with_filter = base.replace("    </datasource>\n    <datasource name='Parameters'",
         "      <column name='[Ratio2]' caption='Ratio 2' datatype='real' role='measure'><calculation class='tableau' formula='[Calculation_Ratio] * 2'/></column>\n      <filter class='categorical' column='[Region]'/>\n    </datasource>\n    <datasource name='Parameters'");
     assert_ne!(with_filter, base);
