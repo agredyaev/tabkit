@@ -1,7 +1,9 @@
 # tabkit
 
-[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-CE422B?logo=rust&logoColor=white)](Cargo.toml)
-[![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4?logo=windows&logoColor=white)](.github/workflows/ci.yml)
+[![Windows CI](https://img.shields.io/github/actions/workflow/status/agredyaev/tabkit/ci.yml?branch=dev&label=Windows%20CI&logo=githubactions&logoColor=white&style=for-the-badge)](https://github.com/agredyaev/tabkit/actions/workflows/ci.yml)
+[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-EF6C00?logo=rust&logoColor=white&style=for-the-badge)](Cargo.toml)
+[![MIT License](https://img.shields.io/badge/License-MIT-3949AB?logo=opensourceinitiative&logoColor=white&style=for-the-badge)](LICENSE)
+[![Security policy](https://img.shields.io/badge/Security-Policy-00897B?style=for-the-badge)](SECURITY.md)
 
 `tabkit` is a Rust CLI and MCP server for working with Tableau 2025 workbooks. It reads `.twb` and `.twbx` files from a chosen workspace, exposes their known structure, and makes supported edits through a reviewable plan. The CLI and MCP server use the same tools.
 

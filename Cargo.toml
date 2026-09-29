@@ -4,6 +4,7 @@ version = "0.1.5"
 edition = "2024"
 rust-version = "1.88"
 description = "Focused Tableau 2025 workbook tools for Amazon Quick Desktop"
+license = "MIT"
 publish = false
 build = "build.rs"
 

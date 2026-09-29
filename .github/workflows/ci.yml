@@ -5,11 +5,15 @@ on:
     branches: [dev, main]
     paths-ignore:
       - README.md
+      - LICENSE
+      - SECURITY.md
       - docs/**
   push:
     branches: [dev]
     paths-ignore:
       - README.md
+      - LICENSE
+      - SECURITY.md
       - docs/**
   workflow_call:
 
