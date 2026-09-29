@@ -80,6 +80,10 @@ with tempfile.TemporaryDirectory(prefix="tabkit-hyper-smoke-") as directory:
 
     tables = query({"operation": "tables"}, 100)["rows"]
     assert tables and all(row[2] == "BASE TABLE" for row in tables)
+    sdk_sample = package.name == "superstore_sample_denormalized.hyper"
+    if sdk_sample:
+        assert sha(package) == "ad09708697de869fad2b91c81593585a6c70d7715d43ffef9dc45a430a6c3600"
+        assert tables == [["Extract", "Extract", "BASE TABLE"]]
     if len(tables) > 1:
         assert query({"operation": "tables"}, 1)["truncated"]
     selected = None
@@ -92,10 +96,18 @@ with tempfile.TemporaryDirectory(prefix="tabkit-hyper-smoke-") as directory:
             break
     assert selected, "Fixture needs a table with text and numeric columns"
     schema, table, text_column, numeric_column = selected
+    if sdk_sample:
+        assert [(row[0], row[1]) for row in columns] == [
+            ("Category", "TEXT"), ("Order Date", "DATE"),
+            ("Sales Target", "BIGINT"), ("Segment", "TEXT")]
     assert query({"operation": "columns", "schema": schema, "table": table}, 1)["truncated"]
     relation = f"{quoted(schema)}.{quoted(table)}"
-    count = int(query({"operation": "query", "sql": f"SELECT COUNT(*) FROM {relation}"})["rows"][0][0])
+    count_operation = {"operation": "query", "sql": f"SELECT COUNT(*) FROM {relation}"}
+    counted = query(count_operation)
+    count = int(counted["rows"][0][0])
     assert count > 2, "Fixture needs at least three rows"
+    if sdk_sample:
+        assert count == 10
     sample = query({"operation": "sample", "schema": schema, "table": table}, 2)
     assert len(sample["rows"]) == 2 and sample["truncated"]
     distinct = query({"operation": "distinct", "schema": schema, "table": table,
@@ -123,24 +135,46 @@ with tempfile.TemporaryDirectory(prefix="tabkit-hyper-smoke-") as directory:
                               "max_rows": 1000}), text=True, capture_output=True, timeout=60, env=env)
         assert limited.returncode == 2 and json.loads(limited.stderr)["error"]["message"] == "HYPER_RESULT_LIMIT"
 
-    messages = [
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-            "protocolVersion": "2025-03-26", "capabilities": {},
-            "clientInfo": {"name": "hyper-smoke", "version": "1"}}},
-        {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-            "name": "hyper_query", "arguments": {**request,
-                "operation": {"operation": "query", "sql": f"SELECT COUNT(*) FROM {relation}"}}}},
+    def mcp(operation, max_rows=10, data=True):
+        messages = [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-03-26", "capabilities": {},
+                "clientInfo": {"name": "hyper-smoke", "version": "1"}}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                "name": "hyper_query", "arguments": {**request,
+                    "operation": operation, "max_rows": max_rows}}},
+        ]
+        run = subprocess.run(common + (["--allow-data-output"] if data else []) + ["mcp"],
+                             input="\n".join(map(json.dumps, messages)) + "\n", text=True,
+                             capture_output=True, timeout=60, env=env)
+        assert run.returncode == 0, run.stderr
+        response = next(json.loads(line) for line in run.stdout.splitlines()
+                        if json.loads(line).get("id") == 2)
+        return response["result"]
+
+    cases = [
+        ({"operation": "tables"}, 100, tables),
+        ({"operation": "columns", "schema": schema, "table": table}, 100, columns),
+        (count_operation, 10, counted["rows"]),
+        ({"operation": "sample", "schema": schema, "table": table}, 2, None),
+        ({"operation": "distinct", "schema": schema, "table": table,
+          "column": text_column}, 3, distinct["rows"]),
+        ({"operation": "min_max", "schema": schema, "table": table,
+          "column": numeric_column}, 10, bounds["rows"]),
     ]
-    run = subprocess.run(common + ["--allow-data-output", "mcp"],
-                         input="\n".join(map(json.dumps, messages)) + "\n", text=True,
-                         capture_output=True, timeout=60, env=env)
-    assert run.returncode == 0, run.stderr
-    response = next(json.loads(line) for line in run.stdout.splitlines()
-                    if json.loads(line).get("id") == 2)
-    assert not response["result"].get("isError")
-    mcp_result = json.loads(response["result"]["content"][0]["text"])
-    assert int(mcp_result["rows"][0][0]) == count
+    for operation, max_rows, expected_rows in cases:
+        result = mcp(operation, max_rows)
+        assert not result.get("isError"), (operation, result)
+        value = json.loads(result["content"][0]["text"])
+        assert value["source_sha256"] == extracted["sha256"]
+        if expected_rows is None:
+            assert len(value["rows"]) == 2 and value["truncated"]
+        else:
+            assert value["rows"] == expected_rows, (operation, value["rows"])
+    denied_mcp = mcp({"operation": "tables"}, data=False)
+    assert denied_mcp["isError"]
+    assert json.loads(denied_mcp["content"][0]["text"])["error"]["code"] == "DATA_POLICY"
     assert sha(source) == source_sha and sha(extract) == extracted["sha256"]
     print(json.dumps({"passed": True, "tables": len(tables), "tested_table": table,
-                      "rows": count, "source_preserved": True, "mcp_query": True}))
+                      "rows": count, "source_preserved": True, "mcp_operations": len(cases)}))
