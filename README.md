@@ -17,7 +17,7 @@
 ## Optional integrations
 
 - **Tableau REST:** Configure a Tableau server and OAuth or PAT credentials to search and download workbooks. Publishing requires `--publish-enabled`, an allowed project, and separate prepare and confirm calls.
-- **Hyper:** The standard build can extract `.hyper` files from `.twbx` packages. Read-only queries require a build with `--features hyper` and the official Hyper SDK/runtime.
+- **Hyper:** The Windows x64 release ZIP includes read-only Hyper queries in CLI and MCP. Extract the whole ZIP and launch `tabkit.exe` from it; `tableauhyperapi.dll` and `hyper/` must stay beside the executable. Pass `--allow-data-output` to permit query results. Source builds need `--features hyper` and the official C++ SDK.
 
 ## Try it locally
 
@@ -29,7 +29,7 @@ cargo build --release --locked
 ./target/release/tabkit --workspace "$(pwd)/examples" validate synthetic.twb
 ```
 
-On Windows, run `target\release\tabkit.exe` with an absolute Windows workspace path. Run `tabkit --workspace <absolute-path> tools` to see the available tools and their JSON schemas. Startup options go before the subcommand.
+On Windows, download `tabkit-windows-x64.zip` from Releases and extract it before running `tabkit.exe` with an absolute Windows workspace path. Run `tabkit --workspace <absolute-path> tools` to see the available tools and their JSON schemas. Startup options go before the subcommand. To inspect an extract from MCP, enable `--allow-data-output`, use `workbook_extract_hyper` for a `.twbx` member if needed, then call `hyper_query` with the `.hyper` path and its SHA-256.
 
 To use MCP, configure your client to launch `tabkit --workspace <absolute-path> mcp` over stdio. See the [MCP configuration examples](examples/quick-mcp.example.json) for Tableau OAuth and [PAT](examples/quick-mcp-pat.example.json). For local workbook work, Tableau credentials are unnecessary.
 
@@ -39,6 +39,6 @@ For edits, copy a workbook into a separate workspace, inspect it, then call `wor
 
 ## Scope
 
-Local validation checks XML and the Tableau structures `tabkit` understands; it does not execute Tableau or prove full workbook semantics. Lineage includes source tables, joins, relationships, SQL table reads, sets/groups, actions, tooltip references, parameter controls, stories, table-calculation configuration and the existing field-to-view routes. Unresolved references and unsupported shapes appear as coverage gaps. Initial SQL effects, interactive action execution and table-calculation results require Tableau. Unsupported edit shapes are rejected. Live Tableau, Amazon Quick Desktop, and native Hyper integration still require environment qualification.
+Local validation checks XML and the Tableau structures `tabkit` understands; it does not execute Tableau or prove full workbook semantics. Lineage includes source tables, joins, relationships, SQL table reads, sets/groups, actions, tooltip references, parameter controls, stories, table-calculation configuration and the existing field-to-view routes. Unresolved references and unsupported shapes appear as coverage gaps. Initial SQL effects, interactive action execution and table-calculation results require Tableau. Unsupported edit shapes are rejected. Live Tableau and Amazon Quick Desktop still require environment qualification; Windows CI exercises native Hyper through the packaged executable and a real SDK extract.
 
 Run `cargo test --locked` for the local test suite. See the [architecture decisions](docs/adr/README.md) for the supported scope.

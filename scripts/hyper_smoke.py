@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in native Hyper smoke against a real TWBX and the official C++ SDK."""
+"""Native Hyper CLI/MCP smoke against a real extract and the official SDK."""
 import hashlib
 import json
 import os
@@ -8,16 +8,27 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 
-if len(sys.argv) != 5:
-    raise SystemExit("usage: hyper_smoke.py <hyper-build-binary> <sdk-dir> <book.twbx> <hyper-entry>")
+if len(sys.argv) not in (4, 5):
+    raise SystemExit("usage: hyper_smoke.py <binary> <sdk-dir> <book.twbx> <hyper-entry> | <binary> <sdk-dir> <sample.hyper>")
 
 binary, sdk, package = (Path(arg).resolve() for arg in sys.argv[1:4])
-entry = sys.argv[4]
-assert (sdk / "lib/hyper/hyperd").is_file()
-assert (sdk / "lib/libtableauhyperapi.dylib").is_file()
+entry = sys.argv[4] if len(sys.argv) == 5 else "Data/sample.hyper"
+runtime = binary.parent / "hyper"
+bundled = (runtime / "hyperd.exe").is_file() or (runtime / "hyperd").is_file()
+if not bundled:
+    runtime = sdk / "lib/hyper"
+    assert (runtime / "hyperd").is_file()
 env = os.environ.copy()
-env["DYLD_LIBRARY_PATH"] = str(sdk / "lib")
+if bundled:
+    env.pop("HYPER_SDK_DIR", None)
+    if os.name == "nt":
+        sdk_bin = (sdk / "bin").resolve()
+        env["PATH"] = os.pathsep.join(path for path in env["PATH"].split(os.pathsep)
+                                          if Path(path).resolve() != sdk_bin)
+if not bundled and (sdk / "lib/libtableauhyperapi.dylib").is_file():
+    env["DYLD_LIBRARY_PATH"] = str(sdk / "lib")
 
 
 def sha(path):
@@ -31,10 +42,16 @@ def quoted(name):
 with tempfile.TemporaryDirectory(prefix="tabkit-hyper-smoke-") as directory:
     workspace = Path(directory)
     source = workspace / "book.twbx"
-    shutil.copyfile(package, source)
+    if package.suffix == ".hyper":
+        with zipfile.ZipFile(source, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.write(Path(__file__).resolve().parents[1] / "examples/synthetic.twb", "book.twb")
+            archive.write(package, entry)
+    else:
+        shutil.copyfile(package, source)
     source_sha = sha(source)
-    common = [str(binary), "--workspace", str(workspace),
-              "--hyper-runtime-directory", str(sdk / "lib/hyper")]
+    common = [str(binary), "--workspace", str(workspace)]
+    if not bundled:
+        common += ["--hyper-runtime-directory", str(runtime)]
 
     def call(tool, args, *, data=True):
         command = common + (["--allow-data-output"] if data else []) + ["call", tool]
@@ -100,10 +117,11 @@ with tempfile.TemporaryDirectory(prefix="tabkit-hyper-smoke-") as directory:
     code, missing = call("hyper_query", {**request,
         "operation": {"operation": "sample", "schema": schema, "table": "tabkit_missing_table"}})
     assert code == 2 and missing["error"]["code"] == "HYPER_QUERY"
-    limited = subprocess.run(common + ["--allow-data-output", "--result-bytes", "8192", "call", "hyper_query"],
-        input=json.dumps({**request, "operation": {"operation": "sample", "schema": schema, "table": table},
-                          "max_rows": 1000}), text=True, capture_output=True, timeout=60, env=env)
-    assert limited.returncode == 2 and json.loads(limited.stderr)["error"]["message"] == "HYPER_RESULT_LIMIT"
+    if count > 100:
+        limited = subprocess.run(common + ["--allow-data-output", "--result-bytes", "8192", "call", "hyper_query"],
+            input=json.dumps({**request, "operation": {"operation": "sample", "schema": schema, "table": table},
+                              "max_rows": 1000}), text=True, capture_output=True, timeout=60, env=env)
+        assert limited.returncode == 2 and json.loads(limited.stderr)["error"]["message"] == "HYPER_RESULT_LIMIT"
 
     messages = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
