@@ -40,7 +40,7 @@ jobs:
         run: |
           $ProgressPreference = 'SilentlyContinue'
           $url = 'https://downloads.tableau.com/tssoftware//tableauhyperapi-cxx-windows-x86_64-release-main.0.0.26479.r96880f6a.zip'
-          Invoke-WebRequest $url -OutFile hyper-sdk.zip
+          curl.exe -fL --retry 3 --max-time 300 --output hyper-sdk.zip $url
           $actual = (Get-FileHash hyper-sdk.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne 'd37f59511322c6060d24ac77a009e44819423ff85202d05a624e2dc64f856ff5') { throw 'Hyper SDK checksum mismatch' }
           Expand-Archive hyper-sdk.zip -DestinationPath sdk
