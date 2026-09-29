@@ -532,7 +532,7 @@ impl App{
             items.push(match a.section {
                 InspectSection::Fields|InspectSection::Calculations|InspectSection::Parameters=>book.field_report(selected_fields[i]),
                 InspectSection::Filters=>book.filter_report(i),
-                InspectSection::Datasources=>serde_json::to_value(&book.datasources[i])?,
+                InspectSection::Datasources=>book.datasource_report(i)?,
                 InspectSection::References=>serde_json::to_value(&book.edges[i])?,
                 InspectSection::Diagnostics=>serde_json::to_value(&book.diagnostics[i])?,
                 InspectSection::LocalDefinitions=>serde_json::to_value(&book.local_definitions[i])?,

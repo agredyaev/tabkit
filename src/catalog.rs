@@ -37,7 +37,7 @@ pub fn tools()->Result<Vec<Tool>>{
     tool::<app::Id>("tableau_get_job","Read asynchronous Tableau job status. Submitted is not completed or verified.",true,false,true)?,
     tool::<rest::ViewExport>("tableau_view_image","Export a PNG of a specific Tableau view and return image content. Requires operator data-output permission.",false,false,true)?,
     tool::<rest::ViewExport>("tableau_view_data","Export bounded CSV to a new workspace file. Tableau 2025 dashboard CSV can cover only the first sheet.",false,false,true)?,
-    tool::<app::Inspect>("workbook_inspect","Page through overview, fields, calculations, parameters, filters, sheets, references, local_definitions, dependency_scopes, uses or package entries using section/offset/limit. Returned IDs are valid only with this input SHA-256.",true,false,false)?,
+    tool::<app::Inspect>("workbook_inspect","Page through overview, fields, calculations, parameters, filters, datasources (connection metadata, Initial SQL and Custom SQL), sheets, references, local_definitions, dependency_scopes, uses or package entries using section/offset/limit. Returned IDs are valid only with this input SHA-256.",true,false,false)?,
     tool::<app::Input>("workbook_lineage_open","Build one read-only lineage snapshot for this MCP session; replaces the previous snapshot. Returns snapshot_id, graph counts and coverage gaps.",true,false,false)?,
     tool::<app::LineageFind>("workbook_lineage_find","Search the open lineage graph by caption or internal-name prefix. IDs are scoped to snapshot_id.",true,false,false)?,
     tool::<app::LineageNeighbors>("workbook_lineage_neighbors","Page through direct upstream or downstream field, filter, sheet and dashboard links in the open graph.",true,false,false)?,
