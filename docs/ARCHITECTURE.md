@@ -34,11 +34,11 @@ traversal, authoring, and package mutation are local.
 - `xml.rs` — generic source-backed XML tree/index; no Tableau version semantics. Nodes are indexed in preorder with exclusive subtree ranges and closing-tag offsets, giving contiguous descendant iteration and O(1) edit insertion-point lookup.
 - `text.rs` — shared case-insensitive matching/hash helpers used by semantic indexes.
 - `package.rs` — TWB/TWBX admission and source-preserving repack; candidate writes return the already verified output package so MCP does not reopen it merely to create a handle.
-- `workbook.rs` — Tableau 26.2 semantic projection, typed IDs, and verified exact-label lookup indexes for the 2026.2.4 target.
+- `workbook.rs` — Tableau 26.2 semantic projection, including parameters, typed IDs, and verified exact-label lookup indexes for the 2026.2.4 target.
 - `formula.rs` — lexical extraction/validation of Tableau field references.
 - `lineage.rs` — compact typed nodes/edges and bounded traversal.
 - `patch.rs` — deterministic non-overlapping byte patches and preservation checks.
-- `edit.rs` — calculation/dashboard semantic specs and lowering.
+- `edit.rs` — calculation, parameter, bounded worksheet, action, and dashboard semantic specs and lowering.
 - `rest.rs` — Tableau REST 3.29 auth/search/download/validate/publish/job boundary.
 - `mcp.rs` — nine thin MCP tools over the core runtime.
 - `mcp_main.rs` — stdio/Streamable HTTP launcher.
@@ -124,10 +124,20 @@ Current edit operations:
 
 ```text
 create_calculation
+create_parameter
+create_worksheet
+create_filter_action
+create_parameter_action
 create_dashboard
 ```
 
 Calculation batches are preflighted as one semantic unit. A calculation may reference another calculation created earlier or later in the same batch when the formula uses that target's bracketed Tableau internal `name`; captions are not rewritten into formula references. Generated calculation fields are reparsed and verified as postconditions after patch application.
+
+Other authored dependencies are intentionally sequential in the MVP. A newly created worksheet, parameter, or dashboard must be reparsed into a candidate handle before a later edit references it. This keeps dependency resolution against one immutable typed snapshot.
+
+Parameter authoring is limited to string/integer/real/boolean values with any/list/range domains. Worksheet authoring is limited to bar, line, KPI, and text-table structures over existing datasource fields. Unsupported combinations fail before patch application.
+
+Filter actions use Tableau's legacy `tsc:tsl-filter` action contract to filter the other compatible worksheets on a dashboard. Parameter actions use `edit-parameter-action` and require source/target datatype compatibility. TapKit does not infer action field mappings or synthesize persisted `Apply to Worksheets` state.
 
 Dashboard design is expressed through nested rows/columns, fixed or weighted sizing, gaps,
 container/canvas padding, text, worksheet zones, filter cards, and supported zone styles. The
@@ -142,8 +152,7 @@ TapKit scans/indexes each referenced worksheet's datasource dependencies and Fil
 edit batch, then resolves all cards from that index. It resolves the exact column-instance, verifies
 the source filter, copies required dependency metadata once per unique XML node, and emits filter
 zones in layout traversal order. Multiple matching column-instances are rejected unless the caller
-supplies the exact instance. It does not currently guess or synthesize cross-sheet/global
-`Apply to Worksheets` semantics.
+supplies the exact instance. It does not guess or synthesize persisted cross-sheet/global `Apply to Worksheets` semantics. Cross-sheet dashboard filtering is authored separately as a filter action.
 
 ## Performance model
 

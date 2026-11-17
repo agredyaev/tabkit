@@ -228,12 +228,17 @@ on its Filters shelf and expose a matching `column-instance`. TapKit then:
 If a worksheet has more than one column-instance for the same field, pass the exact `instance`.
 TapKit does not guess.
 
-### Current filter boundary
+### Filter and action boundary
 
-This release controls the dashboard card and its value-domain behavior. It does **not** yet synthesize
-Tableau's cross-worksheet `Apply to Worksheets` semantics. A card therefore controls its source
-worksheet's existing filter. Cross-sheet/global filter authoring will be added only after validating
-the exact 2026.2 serialization against a real Tableau 2026.2.4 workbook.
+A filter card controls its source worksheet's existing Filters-shelf filter. TapKit does not synthesize
+Tableau's persisted `Apply to Worksheets` sharing state.
 
-This distinction is intentional: a dashboard control is presentation; a worksheet filter and its
-sharing scope are data semantics.
+Cross-sheet interaction is available through `create_filter_action`. The source worksheet must
+already be placed on the dashboard; selecting marks on it filters the other compatible worksheets on
+that dashboard. The source worksheet is excluded from its own action.
+
+Parameter-driven interaction is available through `create_parameter_action`. Parameters and actions
+are documented in [AUTHORING.md](AUTHORING.md).
+
+The distinction is explicit: filter cards are presentation over worksheet filter state; filter
+actions are dashboard interactions.

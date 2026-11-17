@@ -1,8 +1,8 @@
 //! Typed semantic index over a source-backed Tableau TWB document.
 //!
-//! The index is deliberately partial: it models only entities needed by
-//! inspection, lineage, and supported edits. The original [`Document`] remains
-//! authoritative for structure and bytes that are not represented here.
+//! The index is selective: it types only entities needed by inspection, lineage,
+//! and supported edits while the complete [`Document`] remains authoritative for
+//! structure and bytes that are not represented in the typed projection.
 //!
 //! All dense IDs in this module are local to one `Workbook` instance. Reparsing
 //! a candidate rebuilds the index, so IDs must never be persisted or carried
@@ -32,6 +32,9 @@ pub struct FieldId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 /// Dense workbook-local calculation ID; invalid across reparses or other workbooks.
 pub struct CalculationId(pub u32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+/// Dense workbook-local parameter ID; invalid across reparses or other workbooks.
+pub struct ParameterId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 /// Dense workbook-local worksheet ID; invalid across reparses or other workbooks.
 pub struct WorksheetId(pub u32);
@@ -224,6 +227,40 @@ pub struct Calculation {
     pub node: NodeId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ParameterDomainKind {
+    Any,
+    List,
+    Range,
+    Unknown,
+}
+
+impl ParameterDomainKind {
+    fn parse(value: &str) -> Self {
+        match value {
+            "any" => Self::Any,
+            "list" => Self::List,
+            "range" => Self::Range,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// Tableau parameter backed by a field in the synthetic `Parameters` datasource.
+#[derive(Debug, Serialize)]
+pub struct Parameter {
+    pub id: ParameterId,
+    pub field: FieldId,
+    pub name: String,
+    pub caption: Option<String>,
+    pub datatype: DataType,
+    pub domain: ParameterDomainKind,
+    pub value: Option<String>,
+    #[serde(skip)]
+    pub node: NodeId,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Worksheet {
     pub id: WorksheetId,
@@ -249,6 +286,7 @@ pub struct Summary {
     pub relations: usize,
     pub fields: usize,
     pub calculations: usize,
+    pub parameters: usize,
     pub worksheets: usize,
     pub dashboards: usize,
 }
@@ -267,11 +305,13 @@ pub struct Workbook {
     pub relations: Vec<Relation>,
     pub fields: Vec<Field>,
     pub calculations: Vec<Calculation>,
+    pub parameters: Vec<Parameter>,
     pub worksheets: Vec<Worksheet>,
     pub dashboards: Vec<Dashboard>,
     datasource_by_name: HashMap<String, DatasourceId>,
     field_by_name: Vec<HashMap<String, FieldId>>,
     field_by_label_hash: FastHashMap<u64, ExactField>,
+    parameter_by_name: HashMap<String, ParameterId>,
     worksheet_by_name: HashMap<String, WorksheetId>,
     dashboard_by_name: HashMap<String, DashboardId>,
     root_children: HashMap<String, NodeId>,
@@ -324,6 +364,8 @@ impl Workbook {
         let mut relations = Vec::new();
         let mut fields = Vec::new();
         let mut calculations = Vec::new();
+        let mut parameters = Vec::new();
+        let mut parameter_by_name = HashMap::new();
         let mut datasource_by_name = HashMap::new();
         let mut field_by_name = Vec::new();
         let mut field_by_label_hash = FastHashMap::<u64, ExactField>::default();
@@ -346,7 +388,7 @@ impl Workbook {
                 }
                 datasources.push(Datasource {
                     id,
-                    name,
+                    name: name.clone(),
                     caption,
                     inline,
                     node: datasource_node,
@@ -375,20 +417,27 @@ impl Workbook {
                             .as_deref()
                             .unwrap_or("unknown"),
                     );
+                    let parameter_domain = attr_string(&xml, column, "param-domain-type")?;
+                    let parameter_value = attr_string(&xml, column, "value")?;
 
-                    let calculation = if let Some(calc_node) = xml
-                        .children(column)
-                        .find(|child| xml.tag(*child) == "calculation")
-                    {
-                        let formula = attr_string(&xml, calc_node, "formula")?.unwrap_or_default();
-                        let calc_id = CalculationId(calculations.len() as u32);
-                        calculations.push(Calculation {
-                            id: calc_id,
-                            field: field_id,
-                            formula,
-                            node: calc_node,
-                        });
-                        Some(calc_id)
+                    let calculation = if parameter_domain.is_none() {
+                        if let Some(calc_node) = xml
+                            .children(column)
+                            .find(|child| xml.tag(*child) == "calculation")
+                        {
+                            let formula =
+                                attr_string(&xml, calc_node, "formula")?.unwrap_or_default();
+                            let calc_id = CalculationId(calculations.len() as u32);
+                            calculations.push(Calculation {
+                                id: calc_id,
+                                field: field_id,
+                                formula,
+                                node: calc_node,
+                            });
+                            Some(calc_id)
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     };
@@ -405,14 +454,37 @@ impl Workbook {
                     fields.push(Field {
                         id: field_id,
                         datasource: id,
-                        name: internal_name,
-                        caption,
+                        name: internal_name.clone(),
+                        caption: caption.clone(),
                         datatype,
                         role,
                         field_type,
                         calculation,
                         node: column,
                     });
+                    if name == "Parameters"
+                        && let Some(domain) = parameter_domain.as_deref()
+                    {
+                        let parameter_id = ParameterId(parameters.len() as u32);
+                        parameter_by_name
+                            .entry(internal_name.clone())
+                            .or_insert(parameter_id);
+                        if let Some(caption) = &caption {
+                            parameter_by_name
+                                .entry(caption.clone())
+                                .or_insert(parameter_id);
+                        }
+                        parameters.push(Parameter {
+                            id: parameter_id,
+                            field: field_id,
+                            name: internal_name.clone(),
+                            caption: caption.clone(),
+                            datatype,
+                            domain: ParameterDomainKind::parse(domain),
+                            value: parameter_value,
+                            node: column,
+                        });
+                    }
                 }
                 field_by_name.push(lookup);
 
@@ -571,11 +643,13 @@ impl Workbook {
             relations,
             fields,
             calculations,
+            parameters,
             worksheets,
             dashboards,
             datasource_by_name,
             field_by_name,
             field_by_label_hash,
+            parameter_by_name,
             worksheet_by_name,
             dashboard_by_name,
             root_children,
@@ -595,6 +669,7 @@ impl Workbook {
             relations: self.relations.len(),
             fields: self.fields.len(),
             calculations: self.calculations.len(),
+            parameters: self.parameters.len(),
             worksheets: self.worksheets.len(),
             dashboards: self.dashboards.len(),
         }
@@ -617,6 +692,14 @@ impl Workbook {
 
     pub fn field(&self, id: FieldId) -> Option<&Field> {
         self.fields.get(id.0 as usize)
+    }
+
+    pub fn parameter_id(&self, name: &str) -> Option<ParameterId> {
+        self.parameter_by_name.get(name).copied()
+    }
+
+    pub fn parameter(&self, id: ParameterId) -> Option<&Parameter> {
+        self.parameters.get(id.0 as usize)
     }
 
     pub fn worksheet_id(&self, name: &str) -> Option<WorksheetId> {
@@ -683,6 +766,22 @@ pub fn inspect_limited(
         )?,
         "field" => select_fields(book, query, limit)?,
         "calculation" => select_calculations(book, query, limit)?,
+        "parameter" => select_values(
+            &book.parameters,
+            query,
+            limit,
+            |parameter| parameter.caption.as_deref().unwrap_or(&parameter.name),
+            |parameter| {
+                Ok(serde_json::json!({
+                    "id": parameter.id,
+                    "name": parameter.name,
+                    "caption": parameter.caption,
+                    "datatype": parameter.datatype,
+                    "domain": parameter.domain,
+                    "value": parameter.value
+                }))
+            },
+        )?,
         "worksheet" => select_values(
             &book.worksheets,
             query,
@@ -701,7 +800,7 @@ pub fn inspect_limited(
             return Err(Error::new(
                 "ARGUMENT",
                 format!(
-                    "Unknown inspect kind {kind:?}; expected datasource, connection, relation, field, calculation, worksheet, or dashboard"
+                    "Unknown inspect kind {kind:?}; expected datasource, connection, relation, field, calculation, parameter, worksheet, or dashboard"
                 ),
             ));
         }

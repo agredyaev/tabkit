@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::Write as _,
 };
 
@@ -39,6 +39,10 @@ pub struct Batch {
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Edit {
     CreateCalculation(CalculationSpec),
+    CreateParameter(ParameterSpec),
+    CreateWorksheet(WorksheetSpec),
+    CreateFilterAction(FilterActionSpec),
+    CreateParameterAction(ParameterActionSpec),
     CreateDashboard(DashboardSpec),
 }
 
@@ -54,6 +58,122 @@ pub struct CalculationSpec {
     #[serde(rename = "type")]
     pub field_type: FieldType,
     pub name: Option<String>,
+}
+
+/// Tableau parameter authored in the synthetic `Parameters` datasource.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ParameterSpec {
+    pub caption: String,
+    pub datatype: DataType,
+    pub value: serde_json::Value,
+    pub domain: ParameterDomain,
+    pub name: Option<String>,
+}
+
+/// Admitted value domain for a newly authored parameter.
+///
+/// List domains are bounded and must contain the current value. Range domains are
+/// accepted only for numeric datatypes and require an ordered interval with a
+/// positive step.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ParameterDomain {
+    Any,
+    List {
+        values: Vec<serde_json::Value>,
+    },
+    Range {
+        min: serde_json::Value,
+        max: serde_json::Value,
+        step: serde_json::Value,
+    },
+}
+
+/// Minimal worksheet families whose Tableau 2026.2 structure is deterministic.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorksheetKind {
+    Bar,
+    Line,
+    Kpi,
+    TextTable,
+}
+
+/// Aggregations supported by the bounded worksheet compiler.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Aggregation {
+    Sum,
+    Average,
+    Min,
+    Max,
+    Count,
+    CountDistinct,
+}
+
+impl Default for Aggregation {
+    fn default() -> Self {
+        Self::Sum
+    }
+}
+
+/// Narrow worksheet compiler contract over fields already present in one datasource.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WorksheetSpec {
+    pub name: String,
+    pub datasource: String,
+    pub kind: WorksheetKind,
+    pub dimension: Option<String>,
+    pub secondary_dimension: Option<String>,
+    pub measure: String,
+    #[serde(default)]
+    pub aggregation: Aggregation,
+}
+
+/// Tableau activation modes intentionally exposed by the MVP action compiler.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionTrigger {
+    #[default]
+    Select,
+    Hover,
+}
+
+/// Dashboard-wide filter action using Tableau's `tsc:tsl-filter` contract.
+///
+/// The source worksheet must already be placed on `dashboard`. It is excluded
+/// from its own action; other compatible worksheets on that dashboard are the
+/// action targets. This does not synthesize persisted `Apply to Worksheets` state.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FilterActionSpec {
+    pub caption: String,
+    pub dashboard: String,
+    pub source_sheet: String,
+    #[serde(default)]
+    pub run_on: ActionTrigger,
+    #[serde(default = "default_true")]
+    pub auto_clear: bool,
+}
+
+/// Parameter action from one worksheet field instance to an existing parameter.
+///
+/// The source worksheet must already be placed on `dashboard`. Source and target
+/// datatypes must match. `source_instance` is required only when the worksheet
+/// exposes multiple Tableau instances for the requested field.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ParameterActionSpec {
+    pub caption: String,
+    pub dashboard: String,
+    pub source_sheet: String,
+    pub source_field: String,
+    pub source_instance: Option<String>,
+    pub target_parameter: String,
+    #[serde(default)]
+    pub run_on: ActionTrigger,
 }
 
 /// Fixed-size dashboard specification built only from already indexed worksheets.
@@ -207,6 +327,9 @@ pub struct LineStyle {
 pub struct Receipt {
     pub sha256: String,
     pub calculations: Vec<String>,
+    pub parameters: Vec<String>,
+    pub worksheets: Vec<String>,
+    pub actions: Vec<String>,
     pub dashboards: Vec<String>,
 }
 
@@ -255,8 +378,8 @@ struct ZoneRenderer<'a> {
 /// * generated patches are non-overlapping and satisfy expected-source
 ///   preconditions;
 /// * the candidate remains within `max_bytes`;
-/// * the resulting XML is reparsed, and created calculations/dashboards must be
-///   present in the rebuilt semantic index before success is returned.
+/// * the resulting XML is reparsed, and every created calculation, parameter,
+///   worksheet, action, and dashboard is checked before success is returned.
 ///
 /// Failure is atomic from the caller's perspective: no partially edited
 /// [`Workbook`] is returned and the input workbook is unchanged.
@@ -268,8 +391,12 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
     )?;
 
     let mut calculation_keys = HashSet::new();
+    let mut parameter_captions = HashSet::new();
+    let mut worksheet_names = HashSet::new();
+    let mut action_captions = HashSet::new();
     let mut dashboard_names = HashSet::new();
     let mut dashboard_style_sheets = HashSet::new();
+
     for edit in &batch.edits {
         match edit {
             Edit::CreateCalculation(spec) => {
@@ -280,6 +407,34 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
                         "Calculation {:?} is created more than once in datasource {:?}",
                         spec.caption, spec.datasource
                     ),
+                )?;
+            }
+            Edit::CreateParameter(spec) => {
+                require(
+                    parameter_captions.insert(spec.caption.clone()),
+                    "DUPLICATE_EDIT",
+                    format!("Parameter {:?} is created more than once", spec.caption),
+                )?;
+            }
+            Edit::CreateWorksheet(spec) => {
+                require(
+                    worksheet_names.insert(spec.name.clone()),
+                    "DUPLICATE_EDIT",
+                    format!("Worksheet {:?} is created more than once", spec.name),
+                )?;
+            }
+            Edit::CreateFilterAction(spec) => {
+                require(
+                    action_captions.insert(spec.caption.clone()),
+                    "DUPLICATE_EDIT",
+                    format!("Action {:?} is created more than once", spec.caption),
+                )?;
+            }
+            Edit::CreateParameterAction(spec) => {
+                require(
+                    action_captions.insert(spec.caption.clone()),
+                    "DUPLICATE_EDIT",
+                    format!("Action {:?} is created more than once", spec.caption),
                 )?;
             }
             Edit::CreateDashboard(spec) => {
@@ -308,10 +463,33 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
     } else {
         Some(next_dashboard_zone_id(book)?)
     };
+
     let mut patches = Vec::new();
     let mut calculations = Vec::new();
     let mut calculation_checks = Vec::new();
+    let mut parameters = Vec::new();
+    let mut worksheets = Vec::new();
+    let mut actions = Vec::new();
     let mut dashboards = Vec::new();
+
+    let parameter_specs = batch
+        .edits
+        .iter()
+        .filter_map(|edit| match edit {
+            Edit::CreateParameter(spec) => Some(spec),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if !parameter_specs.is_empty() {
+        let (patch, created) = parameter_batch_patch(book, &parameter_specs)?;
+        patches.push(patch);
+        parameters = created;
+    }
+
+    let mut worksheet_xml_batch = String::new();
+    let mut filter_action_xml_batch = String::new();
+    let mut parameter_action_xml_batch = String::new();
+    let mut parameter_dashboard_requests = BTreeMap::<String, BTreeSet<String>>::new();
     let mut dashboard_xml = String::new();
     let mut window_xml = String::new();
     let mut dashboard_other_patches = Vec::new();
@@ -324,6 +502,24 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
                 patches.push(patch);
                 calculation_checks.push((spec.datasource.clone(), name.clone()));
                 calculations.push(name);
+            }
+            Edit::CreateParameter(_) => {}
+            Edit::CreateWorksheet(spec) => {
+                worksheet_xml_batch.push_str(&worksheet_xml(book, spec)?);
+                worksheets.push(spec.name.clone());
+            }
+            Edit::CreateFilterAction(spec) => {
+                filter_action_xml_batch.push_str(&filter_action_xml(book, spec)?);
+                actions.push(spec.caption.clone());
+            }
+            Edit::CreateParameterAction(spec) => {
+                let (xml, parameter_name) = parameter_action_xml(book, spec)?;
+                parameter_action_xml_batch.push_str(&xml);
+                parameter_dashboard_requests
+                    .entry(spec.dashboard.clone())
+                    .or_default()
+                    .insert(parameter_name);
+                actions.push(spec.caption.clone());
             }
             Edit::CreateDashboard(spec) => {
                 let parts = dashboard_parts(
@@ -342,6 +538,19 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
         }
     }
 
+    if !worksheet_xml_batch.is_empty() {
+        patches.push(worksheet_batch_patch(book, worksheet_xml_batch)?);
+    }
+    patches.extend(action_patches(
+        book,
+        filter_action_xml_batch,
+        parameter_action_xml_batch,
+    )?);
+    patches.extend(parameter_dashboard_dependency_patches(
+        book,
+        &parameter_dashboard_requests,
+    )?);
+
     if !dashboards.is_empty() {
         patches.push(dashboard_batch_patch(book, dashboard_xml)?);
         patches.push(dashboard_window_batch_patch(book, window_xml)?);
@@ -350,6 +559,7 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
 
     let text = patch::apply(book.xml.source(), &patches, max_bytes)?;
     let reopened = Workbook::open_string(text)?;
+
     for (datasource, name) in &calculation_checks {
         let datasource_id = reopened.datasource_id(datasource).ok_or_else(|| {
             Error::new(
@@ -371,6 +581,27 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
             format!("Generated field {name:?} is not indexed as a calculation"),
         )?;
     }
+    for name in &parameters {
+        require(
+            reopened.parameter_id(name).is_some(),
+            "POSTCONDITION",
+            format!("Generated parameter {name:?} is not indexed after edit"),
+        )?;
+    }
+    for name in &worksheets {
+        require(
+            reopened.worksheet_id(name).is_some(),
+            "POSTCONDITION",
+            format!("Generated worksheet {name:?} is not indexed after edit"),
+        )?;
+    }
+    for caption in &actions {
+        require(
+            action_caption_exists(&reopened, caption)?,
+            "POSTCONDITION",
+            format!("Generated action {caption:?} is not present after edit"),
+        )?;
+    }
     for name in &dashboards {
         require(
             reopened.dashboard_id(name).is_some(),
@@ -385,6 +616,9 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
         receipt: Receipt {
             sha256,
             calculations,
+            parameters,
+            worksheets,
+            actions,
             dashboards,
         },
     })
@@ -520,6 +754,934 @@ fn calculation_patch(
         },
         internal_name,
     ))
+}
+
+fn parameter_batch_patch(
+    book: &Workbook,
+    specs: &[&ParameterSpec],
+) -> Result<(Patch, Vec<String>)> {
+    let mut captions = HashSet::new();
+    let mut names = HashSet::new();
+    let mut columns = String::new();
+    let mut created = Vec::with_capacity(specs.len());
+
+    for spec in specs {
+        require(
+            !spec.caption.trim().is_empty(),
+            "PARAMETER",
+            "Parameter caption cannot be empty",
+        )?;
+        require(
+            captions.insert(spec.caption.clone()),
+            "DUPLICATE_EDIT",
+            format!("Parameter {:?} is created more than once", spec.caption),
+        )?;
+        require(
+            book.parameter_id(&spec.caption).is_none(),
+            "PARAMETER_EXISTS",
+            format!("Parameter {:?} already exists", spec.caption),
+        )?;
+
+        let name = spec
+            .name
+            .clone()
+            .unwrap_or_else(|| parameter_name(&book.xml.sha256, &spec.caption));
+        require(
+            name.starts_with('[') && name.ends_with(']'),
+            "PARAMETER",
+            "Parameter internal name must be bracketed",
+        )?;
+        require(
+            names.insert(name.clone()),
+            "DUPLICATE_EDIT",
+            format!("Parameter internal name {name:?} is created more than once"),
+        )?;
+        require(
+            book.parameter_id(&name).is_none(),
+            "PARAMETER_EXISTS",
+            format!("Parameter internal name {name:?} already exists"),
+        )?;
+
+        let value = parameter_literal(spec.datatype, &spec.value)?;
+        let field_type = match spec.datatype {
+            DataType::String | DataType::Boolean => "nominal",
+            DataType::Integer | DataType::Real => "quantitative",
+            _ => {
+                return Err(Error::new(
+                    "PARAMETER",
+                    "MVP parameter authoring supports string, integer, real, and boolean datatypes",
+                ));
+            }
+        };
+        let domain = parameter_domain_xml(spec.datatype, &spec.value, &spec.domain)?;
+        write!(
+            columns,
+            "\n      <column caption=\"{}\" datatype=\"{}\" name=\"{}\" param-domain-type=\"{}\" role=\"measure\" type=\"{}\" value=\"{}\">\n        <calculation class=\"tableau\" formula=\"{}\"/>{}\n      </column>",
+            escape_attr(&spec.caption),
+            spec.datatype.as_str(),
+            escape_attr(&name),
+            parameter_domain_name(&spec.domain),
+            field_type,
+            escape_attr(&value),
+            escape_attr(&value),
+            domain,
+        )
+        .map_err(|_| Error::new("INTERNAL", "Failed to render parameter"))?;
+        created.push(name);
+    }
+
+    let (at, replacement) = if let Some(datasource_id) = book.datasource_id("Parameters") {
+        let datasource = book
+            .datasource(datasource_id)
+            .ok_or_else(|| Error::new("INTERNAL", "Parameters datasource id is invalid"))?;
+        require(
+            datasource.inline,
+            "PARAMETER",
+            "Parameters datasource must be inline",
+        )?;
+        (datasource_column_insert_at(book, datasource.node)?, columns)
+    } else {
+        let datasources = book.root_child("datasources").ok_or_else(|| {
+            Error::new(
+                "WORKBOOK_SHAPE",
+                "Parameter creation requires an existing <datasources> container",
+            )
+        })?;
+        let at = book.xml.closing_tag_start(datasources)?;
+        (
+            at,
+            format!(
+                "\n    <datasource hasconnection=\"false\" inline=\"true\" name=\"Parameters\" version=\"{}\">\n      <aliases enabled=\"yes\"/>{}\n    </datasource>",
+                crate::TWB_VERSION,
+                columns
+            ),
+        )
+    };
+
+    Ok((
+        Patch {
+            span: Span::empty(at)?,
+            expected: String::new(),
+            replacement,
+            reason: "create parameter batch".into(),
+        },
+        created,
+    ))
+}
+
+fn parameter_domain_name(domain: &ParameterDomain) -> &'static str {
+    match domain {
+        ParameterDomain::Any => "any",
+        ParameterDomain::List { .. } => "list",
+        ParameterDomain::Range { .. } => "range",
+    }
+}
+
+fn parameter_domain_xml(
+    datatype: DataType,
+    current: &serde_json::Value,
+    domain: &ParameterDomain,
+) -> Result<String> {
+    match domain {
+        ParameterDomain::Any => Ok(String::new()),
+        ParameterDomain::List { values } => {
+            require(
+                !values.is_empty() && values.len() <= 1000,
+                "PARAMETER",
+                "List parameter requires 1..1000 values",
+            )?;
+            require(
+                values.iter().any(|value| value == current),
+                "PARAMETER",
+                "Current parameter value must be present in its list domain",
+            )?;
+            let mut members = String::new();
+            for value in values {
+                let literal = parameter_literal(datatype, value)?;
+                write!(members, "<member value=\"{}\"/>", escape_attr(&literal))
+                    .map_err(|_| Error::new("INTERNAL", "Failed to render parameter member"))?;
+            }
+            Ok(format!("\n        <members>{members}</members>"))
+        }
+        ParameterDomain::Range { min, max, step } => {
+            require(
+                matches!(datatype, DataType::Integer | DataType::Real),
+                "PARAMETER",
+                "Range parameters require integer or real datatype",
+            )?;
+            let min_n = parameter_number(datatype, min)?;
+            let max_n = parameter_number(datatype, max)?;
+            let step_n = parameter_number(datatype, step)?;
+            let current_n = parameter_number(datatype, current)?;
+            require(
+                min_n <= max_n && current_n >= min_n && current_n <= max_n && step_n > 0.0,
+                "PARAMETER",
+                "Range parameter requires min <= current <= max and a positive step",
+            )?;
+            Ok(format!(
+                "\n        <range granularity=\"{}\" max=\"{}\" min=\"{}\"/>",
+                escape_attr(&parameter_literal(datatype, step)?),
+                escape_attr(&parameter_literal(datatype, max)?),
+                escape_attr(&parameter_literal(datatype, min)?),
+            ))
+        }
+    }
+}
+
+fn parameter_number(datatype: DataType, value: &serde_json::Value) -> Result<f64> {
+    match datatype {
+        DataType::Integer => value
+            .as_i64()
+            .map(|value| value as f64)
+            .or_else(|| value.as_u64().map(|value| value as f64))
+            .ok_or_else(|| Error::new("PARAMETER", "Integer parameter value must be an integer")),
+        DataType::Real => value
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| Error::new("PARAMETER", "Real parameter value must be finite")),
+        _ => Err(Error::new("PARAMETER", "Numeric parameter value expected")),
+    }
+}
+
+fn parameter_literal(datatype: DataType, value: &serde_json::Value) -> Result<String> {
+    match datatype {
+        DataType::String => {
+            let value = value.as_str().ok_or_else(|| {
+                Error::new("PARAMETER", "String parameter value must be a JSON string")
+            })?;
+            require(
+                !value.contains(['"', '\n', '\r', '\0']),
+                "PARAMETER",
+                "MVP string parameter values cannot contain quotes, newlines, or NUL",
+            )?;
+            Ok(format!("\"{value}\""))
+        }
+        DataType::Integer => {
+            if let Some(value) = value.as_i64() {
+                Ok(value.to_string())
+            } else if let Some(value) = value.as_u64() {
+                Ok(value.to_string())
+            } else {
+                Err(Error::new(
+                    "PARAMETER",
+                    "Integer parameter value must be an integer",
+                ))
+            }
+        }
+        DataType::Real => value
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .map(|value| value.to_string())
+            .ok_or_else(|| Error::new("PARAMETER", "Real parameter value must be finite")),
+        DataType::Boolean => value
+            .as_bool()
+            .map(|value| value.to_string())
+            .ok_or_else(|| {
+                Error::new("PARAMETER", "Boolean parameter value must be true or false")
+            }),
+        _ => Err(Error::new(
+            "PARAMETER",
+            "MVP parameter authoring supports string, integer, real, and boolean datatypes",
+        )),
+    }
+}
+
+fn parameter_name(workbook_hash: &str, caption: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(workbook_hash.as_bytes());
+    hash.update(b"\0parameter\0");
+    hash.update(caption.as_bytes());
+    let digest = format!("{:x}", hash.finalize());
+    format!("[Parameter_{}]", &digest[..16])
+}
+
+fn worksheet_xml(book: &Workbook, spec: &WorksheetSpec) -> Result<String> {
+    require(
+        !spec.name.trim().is_empty(),
+        "WORKSHEET",
+        "Worksheet name cannot be empty",
+    )?;
+    require(
+        book.worksheet_id(&spec.name).is_none(),
+        "WORKSHEET_EXISTS",
+        format!("Worksheet {:?} already exists", spec.name),
+    )?;
+    require(
+        spec.datasource != "Parameters",
+        "WORKSHEET",
+        "Parameters datasource cannot be used as a visualization datasource",
+    )?;
+
+    let datasource_id = book.datasource_id(&spec.datasource).ok_or_else(|| {
+        Error::new(
+            "DATASOURCE_NOT_FOUND",
+            format!(
+                "Datasource {:?} does not exist in this workbook",
+                spec.datasource
+            ),
+        )
+    })?;
+    let datasource = book
+        .datasource(datasource_id)
+        .ok_or_else(|| Error::new("INTERNAL", "Datasource id is invalid"))?;
+    let measure = resolve_field(book, datasource_id, &spec.measure)?;
+    require(
+        matches!(measure.datatype, DataType::Integer | DataType::Real),
+        "WORKSHEET",
+        "MVP worksheet measures must be integer or real fields",
+    )?;
+
+    let dimension = spec
+        .dimension
+        .as_deref()
+        .map(|name| resolve_field(book, datasource_id, name))
+        .transpose()?;
+    let secondary = spec
+        .secondary_dimension
+        .as_deref()
+        .map(|name| resolve_field(book, datasource_id, name))
+        .transpose()?;
+
+    match spec.kind {
+        WorksheetKind::Bar => require(
+            dimension.is_some() && secondary.is_none(),
+            "WORKSHEET",
+            "Bar worksheet requires dimension and does not accept secondary_dimension",
+        )?,
+        WorksheetKind::Line => {
+            let dimension = dimension.ok_or_else(|| {
+                Error::new("WORKSHEET", "Line worksheet requires a date dimension")
+            })?;
+            require(
+                matches!(dimension.datatype, DataType::Date | DataType::Datetime)
+                    && secondary.is_none(),
+                "WORKSHEET",
+                "Line worksheet requires one date/datetime dimension and no secondary_dimension",
+            )?;
+        }
+        WorksheetKind::Kpi => require(
+            dimension.is_none() && secondary.is_none(),
+            "WORKSHEET",
+            "KPI worksheet accepts only a measure",
+        )?,
+        WorksheetKind::TextTable => require(
+            dimension.is_some(),
+            "WORKSHEET",
+            "Text table requires at least one dimension",
+        )?,
+    }
+
+    let mut column_nodes = Vec::new();
+    if let Some(field) = dimension {
+        column_nodes.push(field.node);
+    }
+    if let Some(field) = secondary {
+        if !column_nodes.contains(&field.node) {
+            column_nodes.push(field.node);
+        }
+    }
+    if !column_nodes.contains(&measure.node) {
+        column_nodes.push(measure.node);
+    }
+    let mut dependencies = String::new();
+    for node in column_nodes {
+        dependencies.push_str(&book.xml.source()[book.xml.span(node).range()]);
+    }
+
+    let measure_instance = aggregate_instance(measure, spec.aggregation);
+    let measure_ref = qualified_instance(&spec.datasource, &measure_instance.name);
+    let mut instances = format!(
+        "<column-instance column=\"{}\" derivation=\"{}\" name=\"{}\" pivot=\"key\" type=\"quantitative\"/>",
+        escape_attr(&measure.name),
+        measure_instance.derivation,
+        escape_attr(&measure_instance.name),
+    );
+
+    let mut dimension_ref = None;
+    if let Some(field) = dimension {
+        let instance = if spec.kind == WorksheetKind::Line {
+            date_month_instance(field)
+        } else {
+            discrete_instance(field)?
+        };
+        dimension_ref = Some(qualified_instance(&spec.datasource, &instance.name));
+        write!(
+            instances,
+            "<column-instance column=\"{}\" derivation=\"{}\" name=\"{}\" pivot=\"key\" type=\"{}\"/>",
+            escape_attr(&field.name),
+            instance.derivation,
+            escape_attr(&instance.name),
+            instance.field_type,
+        )
+        .map_err(|_| Error::new("INTERNAL", "Failed to render worksheet dimension"))?;
+    }
+
+    let mut secondary_ref = None;
+    if let Some(field) = secondary {
+        let instance = discrete_instance(field)?;
+        secondary_ref = Some(qualified_instance(&spec.datasource, &instance.name));
+        write!(
+            instances,
+            "<column-instance column=\"{}\" derivation=\"{}\" name=\"{}\" pivot=\"key\" type=\"{}\"/>",
+            escape_attr(&field.name),
+            instance.derivation,
+            escape_attr(&instance.name),
+            instance.field_type,
+        )
+        .map_err(|_| Error::new("INTERNAL", "Failed to render worksheet secondary dimension"))?;
+    }
+
+    let (rows, cols, mark, encoding) = match spec.kind {
+        WorksheetKind::Bar => (
+            measure_ref.clone(),
+            dimension_ref.unwrap_or_default(),
+            "Automatic",
+            String::new(),
+        ),
+        WorksheetKind::Line => (
+            measure_ref.clone(),
+            dimension_ref.unwrap_or_default(),
+            "Automatic",
+            String::new(),
+        ),
+        WorksheetKind::Kpi => (
+            String::new(),
+            String::new(),
+            "Automatic",
+            format!(
+                "<encodings><text column=\"{}\"/></encodings>",
+                escape_attr(&measure_ref)
+            ),
+        ),
+        WorksheetKind::TextTable => (
+            dimension_ref.unwrap_or_default(),
+            secondary_ref.unwrap_or_default(),
+            "Automatic",
+            format!(
+                "<encodings><text column=\"{}\"/></encodings>",
+                escape_attr(&measure_ref)
+            ),
+        ),
+    };
+
+    let caption = datasource.caption.as_deref().unwrap_or(&datasource.name);
+    let uuid = deterministic_uuid(&book.xml.sha256, &format!("worksheet:{}", spec.name));
+    Ok(format!(
+        "\n    <worksheet name=\"{}\">\n      <table>\n        <view>\n          <datasources><datasource caption=\"{}\" name=\"{}\"/></datasources>\n          <datasource-dependencies datasource=\"{}\">{}{}</datasource-dependencies>\n          <aggregation value=\"true\"/>\n        </view>\n        <style/>\n        <panes><pane selection-relaxation-option=\"selection-relaxation-allow\"><view><breakdown value=\"auto\"/></view><mark class=\"{}\"/>{}</pane></panes>\n        <rows>{}</rows><cols>{}</cols>\n      </table>\n      <simple-id uuid=\"{}\"/>\n    </worksheet>",
+        escape_attr(&spec.name),
+        escape_attr(caption),
+        escape_attr(&datasource.name),
+        escape_attr(&datasource.name),
+        dependencies,
+        instances,
+        mark,
+        encoding,
+        escape_text(&rows),
+        escape_text(&cols),
+        uuid,
+    ))
+}
+
+struct InstanceSpec {
+    name: String,
+    derivation: &'static str,
+    field_type: &'static str,
+}
+
+fn resolve_field<'a>(
+    book: &'a Workbook,
+    datasource: DatasourceId,
+    name: &str,
+) -> Result<&'a crate::workbook::Field> {
+    let id = book
+        .field_id(datasource, name)
+        .or_else(|| {
+            (!name.starts_with('['))
+                .then(|| bracket_name(name))
+                .and_then(|name| book.field_id(datasource, &name))
+        })
+        .ok_or_else(|| {
+            Error::new(
+                "FIELD_NOT_FOUND",
+                format!("Field {name:?} does not exist in the datasource"),
+            )
+        })?;
+    book.field(id)
+        .ok_or_else(|| Error::new("INTERNAL", "Field id is invalid"))
+}
+
+fn field_token(field: &crate::workbook::Field) -> &str {
+    field
+        .name
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(&field.name)
+}
+
+fn aggregate_instance(field: &crate::workbook::Field, aggregation: Aggregation) -> InstanceSpec {
+    InstanceSpec {
+        name: format!("[{}:{}:qk]", aggregation.prefix(), field_token(field)),
+        derivation: aggregation.derivation(),
+        field_type: "quantitative",
+    }
+}
+
+fn discrete_instance(field: &crate::workbook::Field) -> Result<InstanceSpec> {
+    require(
+        field.field_type != FieldType::Unknown,
+        "WORKSHEET",
+        "Dimension field type is unknown",
+    )?;
+    Ok(InstanceSpec {
+        name: format!("[none:{}:nk]", field_token(field)),
+        derivation: "None",
+        field_type: field.field_type.as_str(),
+    })
+}
+
+fn date_month_instance(field: &crate::workbook::Field) -> InstanceSpec {
+    InstanceSpec {
+        name: format!("[tmn:{}:qk]", field_token(field)),
+        derivation: "Month-Trunc",
+        field_type: "quantitative",
+    }
+}
+
+fn qualified_instance(datasource: &str, instance: &str) -> String {
+    format!("{}.{}", bracket_name(datasource), instance)
+}
+
+fn worksheet_batch_patch(book: &Workbook, worksheets: String) -> Result<Patch> {
+    let root = book.root_child("worksheets").ok_or_else(|| {
+        Error::new(
+            "WORKBOOK_SHAPE",
+            "Worksheet creation requires an existing <worksheets> container",
+        )
+    })?;
+    Ok(Patch {
+        span: Span::empty(book.xml.closing_tag_start(root)?)?,
+        expected: String::new(),
+        replacement: worksheets,
+        reason: "create worksheet batch".into(),
+    })
+}
+
+fn filter_action_xml(book: &Workbook, spec: &FilterActionSpec) -> Result<String> {
+    validate_action_source(book, &spec.caption, &spec.dashboard, &spec.source_sheet)?;
+    let exclude = format!(
+        "<param name=\"exclude\" value=\"{}\"/>",
+        escape_attr(&spec.source_sheet)
+    );
+    Ok(format!(
+        "\n    <action caption=\"{}\" name=\"{}\"><activation auto-clear=\"{}\" type=\"{}\"/><source dashboard=\"{}\" type=\"sheet\" worksheet=\"{}\"/><command command=\"tsc:tsl-filter\">{}<param name=\"special-fields\" value=\"all\"/><param name=\"target\" value=\"{}\"/></command></action>",
+        escape_attr(&spec.caption),
+        action_name(&book.xml.sha256, "filter", &spec.caption),
+        spec.auto_clear,
+        spec.run_on.as_str(),
+        escape_attr(&spec.dashboard),
+        escape_attr(&spec.source_sheet),
+        exclude,
+        escape_attr(&spec.dashboard),
+    ))
+}
+
+fn parameter_action_xml(book: &Workbook, spec: &ParameterActionSpec) -> Result<(String, String)> {
+    validate_action_source(book, &spec.caption, &spec.dashboard, &spec.source_sheet)?;
+    let (source, source_datatype) = resolve_worksheet_field_instance(
+        book,
+        &spec.source_sheet,
+        &spec.source_field,
+        spec.source_instance.as_deref(),
+    )?;
+    let parameter_id = book.parameter_id(&spec.target_parameter).ok_or_else(|| {
+        Error::new(
+            "PARAMETER_NOT_FOUND",
+            format!(
+                "Parameter {:?} does not exist in this workbook",
+                spec.target_parameter
+            ),
+        )
+    })?;
+    let parameter = book
+        .parameter(parameter_id)
+        .ok_or_else(|| Error::new("INTERNAL", "Parameter id is invalid"))?;
+    let field = book
+        .field(parameter.field)
+        .ok_or_else(|| Error::new("INTERNAL", "Parameter field id is invalid"))?;
+    require(
+        source_datatype == parameter.datatype,
+        "ACTION",
+        format!(
+            "Parameter action source field datatype {:?} does not match target parameter datatype {:?}",
+            source_datatype, parameter.datatype
+        ),
+    )?;
+    let target = format!("[Parameters].{}", field.name);
+
+    Ok((
+        format!(
+            "\n    <edit-parameter-action caption=\"{}\" name=\"{}\"><activation type=\"{}\"/><source dashboard=\"{}\" type=\"sheet\" worksheet=\"{}\"/><agg-type type=\"{}\"/><clear-option type=\"do-nothing\" value=\"s:LROOT:\"/><params><param name=\"source-field\" value=\"{}\"/><param name=\"target-parameter\" value=\"{}\"/></params></edit-parameter-action>",
+            escape_attr(&spec.caption),
+            action_name(&book.xml.sha256, "parameter", &spec.caption),
+            spec.run_on.as_str(),
+            escape_attr(&spec.dashboard),
+            escape_attr(&spec.source_sheet),
+            "attr",
+            escape_attr(&source),
+            escape_attr(&target),
+        ),
+        field.name.clone(),
+    ))
+}
+
+fn validate_action_source(
+    book: &Workbook,
+    caption: &str,
+    dashboard: &str,
+    source_sheet: &str,
+) -> Result<()> {
+    require(
+        !caption.trim().is_empty(),
+        "ACTION",
+        "Action caption cannot be empty",
+    )?;
+    require(
+        !action_caption_exists(book, caption)?,
+        "ACTION_EXISTS",
+        format!("Action caption {caption:?} already exists"),
+    )?;
+    let dashboard_id = book.dashboard_id(dashboard).ok_or_else(|| {
+        Error::new(
+            "DASHBOARD_NOT_FOUND",
+            format!("Dashboard {dashboard:?} does not exist in this workbook"),
+        )
+    })?;
+    require(
+        book.worksheet_id(source_sheet).is_some(),
+        "WORKSHEET_NOT_FOUND",
+        format!("Worksheet {source_sheet:?} does not exist in this workbook"),
+    )?;
+    let dashboard = book
+        .dashboards
+        .get(dashboard_id.0 as usize)
+        .ok_or_else(|| Error::new("INTERNAL", "Dashboard id is invalid"))?;
+    let on_dashboard = book.xml.descendants(dashboard.node).any(|node| {
+        book.xml.tag(node) == "zone" && book.xml.attr_raw(node, "name") == Some(source_sheet)
+    });
+    require(
+        on_dashboard,
+        "ACTION",
+        format!("Source worksheet {source_sheet:?} is not placed on dashboard {dashboard:?}"),
+    )
+}
+
+fn action_caption_exists(book: &Workbook, caption: &str) -> Result<bool> {
+    let Some(actions) = book.root_child("actions") else {
+        return Ok(false);
+    };
+    for node in book.xml.children(actions) {
+        if matches!(
+            book.xml.tag(node),
+            "action" | "edit-parameter-action" | "edit-group-action" | "nav-action"
+        ) && book
+            .xml
+            .attr(node, "caption")?
+            .is_some_and(|value| value == caption)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn action_name(workbook_hash: &str, kind: &str, caption: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(workbook_hash.as_bytes());
+    hash.update(b"\0action\0");
+    hash.update(kind.as_bytes());
+    hash.update(b"\0");
+    hash.update(caption.as_bytes());
+    let digest = format!("{:X}", hash.finalize());
+    format!("[Action1_{}]", &digest[..32])
+}
+
+fn resolve_worksheet_field_instance(
+    book: &Workbook,
+    worksheet_name: &str,
+    field_name: &str,
+    requested_instance: Option<&str>,
+) -> Result<(String, DataType)> {
+    let worksheet_id = book.worksheet_id(worksheet_name).ok_or_else(|| {
+        Error::new(
+            "WORKSHEET_NOT_FOUND",
+            format!("Worksheet {worksheet_name:?} does not exist in this workbook"),
+        )
+    })?;
+    let worksheet = book
+        .worksheets
+        .get(worksheet_id.0 as usize)
+        .ok_or_else(|| Error::new("INTERNAL", "Worksheet id is invalid"))?;
+
+    let mut matches = Vec::new();
+    for dependency in book
+        .xml
+        .descendants(worksheet.node)
+        .filter(|node| book.xml.tag(*node) == "datasource-dependencies")
+    {
+        let Some(datasource_name) = book.xml.attr(dependency, "datasource")? else {
+            continue;
+        };
+        let Some(datasource_id) = book.datasource_id(datasource_name.as_ref()) else {
+            continue;
+        };
+        let Some(field_id) = book.field_id(datasource_id, field_name).or_else(|| {
+            (!field_name.starts_with('['))
+                .then(|| bracket_name(field_name))
+                .and_then(|name| book.field_id(datasource_id, &name))
+        }) else {
+            continue;
+        };
+        let field = book
+            .field(field_id)
+            .ok_or_else(|| Error::new("INTERNAL", "Field id is invalid"))?;
+        for child in book.xml.children(dependency) {
+            if book.xml.tag(child) != "column-instance"
+                || book.xml.attr(child, "column")?.as_deref() != Some(field.name.as_str())
+            {
+                continue;
+            }
+            let Some(instance) = book.xml.attr(child, "name")? else {
+                continue;
+            };
+            if requested_instance.is_none_or(|wanted| wanted == instance) {
+                matches.push((
+                    format!("{}.{}", bracket_name(datasource_name.as_ref()), instance),
+                    field.datatype,
+                ));
+            }
+        }
+    }
+
+    require(
+        !matches.is_empty(),
+        "ACTION_SOURCE_FIELD",
+        format!(
+            "Worksheet {worksheet_name:?} does not expose a column-instance for field {field_name:?}"
+        ),
+    )?;
+    require(
+        matches.len() == 1,
+        "ACTION_SOURCE_AMBIGUOUS",
+        format!(
+            "Worksheet {worksheet_name:?} exposes multiple instances for field {field_name:?}; pass source_instance"
+        ),
+    )?;
+    Ok(matches.remove(0))
+}
+
+fn action_patches(
+    book: &Workbook,
+    filter_actions: String,
+    parameter_actions: String,
+) -> Result<Vec<Patch>> {
+    if filter_actions.is_empty() && parameter_actions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if let Some(actions) = book.root_child("actions") {
+        let mut patches = Vec::new();
+        if !filter_actions.is_empty() {
+            let at = book
+                .xml
+                .children(actions)
+                .find(|node| book.xml.tag(*node) != "action")
+                .map(|node| book.xml.span(node).start as usize)
+                .unwrap_or(book.xml.closing_tag_start(actions)?);
+            patches.push(Patch {
+                span: Span::empty(at)?,
+                expected: String::new(),
+                replacement: filter_actions,
+                reason: "create filter actions".into(),
+            });
+        }
+        if !parameter_actions.is_empty() {
+            patches.push(Patch {
+                span: Span::empty(book.xml.closing_tag_start(actions)?)?,
+                expected: String::new(),
+                replacement: parameter_actions,
+                reason: "create parameter actions".into(),
+            });
+        }
+        return Ok(patches);
+    }
+
+    let worksheets = book.root_child("worksheets").ok_or_else(|| {
+        Error::new(
+            "WORKBOOK_SHAPE",
+            "Action creation requires an existing <worksheets> container",
+        )
+    })?;
+    Ok(vec![Patch {
+        span: Span::empty(book.xml.span(worksheets).start as usize)?,
+        expected: String::new(),
+        replacement: format!("\n  <actions>{filter_actions}{parameter_actions}\n  </actions>\n  "),
+        reason: "create actions container".into(),
+    }])
+}
+
+fn parameter_dashboard_dependency_patches(
+    book: &Workbook,
+    requests: &BTreeMap<String, BTreeSet<String>>,
+) -> Result<Vec<Patch>> {
+    let mut patches = Vec::new();
+    require(
+        requests.is_empty() || book.datasource_id("Parameters").is_some(),
+        "PARAMETER_NOT_FOUND",
+        "Parameters datasource does not exist",
+    )?;
+
+    for (dashboard_name, parameters) in requests {
+        let dashboard_id = book.dashboard_id(dashboard_name).ok_or_else(|| {
+            Error::new(
+                "DASHBOARD_NOT_FOUND",
+                format!("Dashboard {dashboard_name:?} does not exist in this workbook"),
+            )
+        })?;
+        let dashboard = book
+            .dashboards
+            .get(dashboard_id.0 as usize)
+            .ok_or_else(|| Error::new("INTERNAL", "Dashboard id is invalid"))?;
+        let zones = book
+            .xml
+            .direct_child(dashboard.node, "zones")
+            .ok_or_else(|| Error::new("WORKBOOK_SHAPE", "Dashboard has no zones container"))?;
+
+        let mut requested_columns = Vec::new();
+        for parameter_name in parameters {
+            let parameter_id = book.parameter_id(parameter_name).ok_or_else(|| {
+                Error::new(
+                    "PARAMETER_NOT_FOUND",
+                    format!("Parameter {parameter_name:?} does not exist"),
+                )
+            })?;
+            let parameter = book
+                .parameter(parameter_id)
+                .ok_or_else(|| Error::new("INTERNAL", "Parameter id is invalid"))?;
+            let field = book
+                .field(parameter.field)
+                .ok_or_else(|| Error::new("INTERNAL", "Parameter field id is invalid"))?;
+            requested_columns.push((field.name.as_str(), field.node));
+        }
+
+        let datasources = book.xml.direct_child(dashboard.node, "datasources");
+        let existing_dep = book.xml.children(dashboard.node).find(|node| {
+            book.xml.tag(*node) == "datasource-dependencies"
+                && book.xml.attr_raw(*node, "datasource") == Some("Parameters")
+        });
+
+        let declares_parameters = datasources.is_some_and(|container| {
+            book.xml.children(container).any(|node| {
+                book.xml.tag(node) == "datasource"
+                    && book.xml.attr_raw(node, "name") == Some("Parameters")
+            })
+        });
+
+        if !declares_parameters {
+            if let Some(container) = datasources {
+                patches.push(Patch {
+                    span: Span::empty(book.xml.closing_tag_start(container)?)?,
+                    expected: String::new(),
+                    replacement: "<datasource name=\"Parameters\"/>".into(),
+                    reason: format!("declare Parameters datasource on dashboard {dashboard_name}"),
+                });
+            } else if let Some(dependency) = existing_dep {
+                patches.push(Patch {
+                    span: Span::empty(book.xml.span(dependency).start as usize)?,
+                    expected: String::new(),
+                    replacement: "<datasources><datasource name=\"Parameters\"/></datasources>"
+                        .into(),
+                    reason: format!("declare Parameters datasource on dashboard {dashboard_name}"),
+                });
+            }
+        }
+
+        if let Some(dependency) = existing_dep {
+            let existing_names = book
+                .xml
+                .children(dependency)
+                .filter(|node| book.xml.tag(*node) == "column")
+                .filter_map(|node| book.xml.attr_raw(node, "name"))
+                .collect::<HashSet<_>>();
+            let mut missing = String::new();
+            for (name, node) in requested_columns {
+                if !existing_names.contains(name) {
+                    missing.push_str(&book.xml.source()[book.xml.span(node).range()]);
+                }
+            }
+            if !missing.is_empty() {
+                patches.push(Patch {
+                    span: Span::empty(book.xml.closing_tag_start(dependency)?)?,
+                    expected: String::new(),
+                    replacement: missing,
+                    reason: format!("add parameter dependencies to dashboard {dashboard_name}"),
+                });
+            }
+            continue;
+        }
+
+        let mut columns = String::new();
+        for (_, node) in requested_columns {
+            columns.push_str(&book.xml.source()[book.xml.span(node).range()]);
+        }
+        let dependency_xml = format!(
+            "<datasource-dependencies datasource=\"Parameters\">{columns}</datasource-dependencies>"
+        );
+        let replacement = if datasources.is_none() {
+            format!("<datasources><datasource name=\"Parameters\"/></datasources>{dependency_xml}")
+        } else {
+            dependency_xml
+        };
+        patches.push(Patch {
+            span: Span::empty(book.xml.span(zones).start as usize)?,
+            expected: String::new(),
+            replacement,
+            reason: format!("add parameter dependencies to dashboard {dashboard_name}"),
+        });
+    }
+    Ok(patches)
+}
+
+impl Aggregation {
+    fn derivation(self) -> &'static str {
+        match self {
+            Self::Sum => "Sum",
+            Self::Average => "Average",
+            Self::Min => "Min",
+            Self::Max => "Max",
+            Self::Count => "Count",
+            Self::CountDistinct => "CountD",
+        }
+    }
+
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Sum => "sum",
+            Self::Average => "avg",
+            Self::Min => "min",
+            Self::Max => "max",
+            Self::Count => "cnt",
+            Self::CountDistinct => "ctd",
+        }
+    }
+}
+
+impl ActionTrigger {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Select => "on-select",
+            Self::Hover => "on-hover",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2325,6 +3487,334 @@ mod tests {
 </workbook>"#
                 .to_vec(),
         )
+    }
+
+    fn worksheet_authoring_workbook() -> Result<Workbook> {
+        Workbook::open(
+            br#"<workbook version="26.2" source-build="0.0.0">
+  <datasources>
+    <datasource caption="Orders" inline="true" name="Orders" version="26.2">
+      <column caption="Sales" datatype="real" name="[Sales]" role="measure" type="quantitative"/>
+      <column caption="Region" datatype="string" name="[Region]" role="dimension" type="nominal"/>
+      <column caption="Category" datatype="string" name="[Category]" role="dimension" type="nominal"/>
+      <column caption="Order Date" datatype="date" name="[Order Date]" role="dimension" type="ordinal"/>
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name="Seed"><simple-id uuid="{00000000-0000-0000-0000-000000000001}"/></worksheet>
+  </worksheets>
+</workbook>"#
+                .to_vec(),
+        )
+    }
+
+    #[test]
+    fn creates_and_indexes_list_and_range_parameters() -> Result<()> {
+        let book = worksheet_authoring_workbook()?;
+        let batch = Batch {
+            edits: vec![
+                Edit::CreateParameter(ParameterSpec {
+                    caption: "View Mode".into(),
+                    datatype: DataType::String,
+                    value: serde_json::json!("Bar"),
+                    domain: ParameterDomain::List {
+                        values: vec![serde_json::json!("Bar"), serde_json::json!("Line")],
+                    },
+                    name: Some("[View Mode]".into()),
+                }),
+                Edit::CreateParameter(ParameterSpec {
+                    caption: "Top N".into(),
+                    datatype: DataType::Integer,
+                    value: serde_json::json!(5),
+                    domain: ParameterDomain::Range {
+                        min: serde_json::json!(1),
+                        max: serde_json::json!(20),
+                        step: serde_json::json!(1),
+                    },
+                    name: Some("[Top N]".into()),
+                }),
+            ],
+        };
+
+        let candidate = apply(&book, &batch, 8 << 20)?;
+        assert!(candidate.workbook.parameter_id("View Mode").is_some());
+        assert!(candidate.workbook.parameter_id("[Top N]").is_some());
+        assert_eq!(candidate.workbook.parameters.len(), 2);
+        let inspected = crate::workbook::inspect_limited(
+            &candidate.workbook,
+            "parameter",
+            Some("view mode"),
+            10,
+        )?;
+        assert_eq!(inspected["count"], 1);
+        assert_eq!(inspected["items"][0]["caption"], "View Mode");
+        assert_eq!(
+            candidate.workbook.calculations.len(),
+            book.calculations.len(),
+            "parameter value calculations must not be exposed as authored calculations"
+        );
+        assert!(candidate.text().contains(r#"param-domain-type="list""#));
+        assert!(candidate.text().contains(r#"param-domain-type="range""#));
+        assert!(
+            candidate
+                .text()
+                .contains(r#"<member value="&quot;Bar&quot;"/>"#)
+        );
+        assert!(
+            candidate
+                .text()
+                .contains(r#"<range granularity="1" max="20" min="1"/>"#)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn creates_minimal_bar_line_kpi_and_text_table_worksheets() -> Result<()> {
+        let book = worksheet_authoring_workbook()?;
+        let batch = Batch {
+            edits: vec![
+                Edit::CreateWorksheet(WorksheetSpec {
+                    name: "Sales by Region".into(),
+                    datasource: "Orders".into(),
+                    kind: WorksheetKind::Bar,
+                    dimension: Some("Region".into()),
+                    secondary_dimension: None,
+                    measure: "Sales".into(),
+                    aggregation: Aggregation::Sum,
+                }),
+                Edit::CreateWorksheet(WorksheetSpec {
+                    name: "Sales Trend".into(),
+                    datasource: "Orders".into(),
+                    kind: WorksheetKind::Line,
+                    dimension: Some("Order Date".into()),
+                    secondary_dimension: None,
+                    measure: "Sales".into(),
+                    aggregation: Aggregation::Sum,
+                }),
+                Edit::CreateWorksheet(WorksheetSpec {
+                    name: "Total Sales".into(),
+                    datasource: "Orders".into(),
+                    kind: WorksheetKind::Kpi,
+                    dimension: None,
+                    secondary_dimension: None,
+                    measure: "Sales".into(),
+                    aggregation: Aggregation::Sum,
+                }),
+                Edit::CreateWorksheet(WorksheetSpec {
+                    name: "Sales Matrix".into(),
+                    datasource: "Orders".into(),
+                    kind: WorksheetKind::TextTable,
+                    dimension: Some("Region".into()),
+                    secondary_dimension: Some("Category".into()),
+                    measure: "Sales".into(),
+                    aggregation: Aggregation::Sum,
+                }),
+            ],
+        };
+
+        let candidate = apply(&book, &batch, 8 << 20)?;
+        for name in [
+            "Sales by Region",
+            "Sales Trend",
+            "Total Sales",
+            "Sales Matrix",
+        ] {
+            assert!(
+                candidate.workbook.worksheet_id(name).is_some(),
+                "worksheet {name:?} was not indexed after authoring"
+            );
+        }
+        assert!(candidate.text().contains(r#"derivation="Month-Trunc""#));
+        assert!(candidate.text().contains(r#"name="[tmn:Order Date:qk]""#));
+        assert!(
+            candidate
+                .text()
+                .contains(r#"<text column="[Orders].[sum:Sales:qk]"/>"#)
+        );
+        assert_eq!(
+            candidate
+                .text()
+                .matches(r#"<mark class="Automatic"/>"#)
+                .count(),
+            4
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn creates_filter_and_parameter_actions_in_sequential_edits() -> Result<()> {
+        let base = dashboard_workbook()?;
+        let dashboard = apply(
+            &base,
+            &Batch {
+                edits: vec![Edit::CreateDashboard(DashboardSpec {
+                    name: "Interactive".into(),
+                    width: 1200,
+                    height: 800,
+                    padding: 16,
+                    background: None,
+                    view_styles: Vec::new(),
+                    layout: Layout::Row {
+                        gap: 12,
+                        padding: 0,
+                        children: vec![
+                            Item {
+                                weight: 1,
+                                fixed_size: None,
+                                style: ZoneStyle::default(),
+                                layout: Layout::Sheet {
+                                    sheet: "Trend".into(),
+                                    show_title: None,
+                                    fit: None,
+                                },
+                            },
+                            Item {
+                                weight: 1,
+                                fixed_size: None,
+                                style: ZoneStyle::default(),
+                                layout: Layout::Sheet {
+                                    sheet: "Region".into(),
+                                    show_title: None,
+                                    fit: None,
+                                },
+                            },
+                        ],
+                    },
+                })],
+            },
+            8 << 20,
+        )?;
+
+        let filtered = apply(
+            &dashboard.workbook,
+            &Batch {
+                edits: vec![Edit::CreateFilterAction(FilterActionSpec {
+                    caption: "Filter other views".into(),
+                    dashboard: "Interactive".into(),
+                    source_sheet: "Trend".into(),
+                    run_on: ActionTrigger::Select,
+                    auto_clear: true,
+                })],
+            },
+            8 << 20,
+        )?;
+        assert!(filtered.text().contains(r#"command="tsc:tsl-filter""#));
+        assert!(filtered.text().contains(r#"name="exclude" value="Trend""#));
+
+        let parameterized = apply(
+            &filtered.workbook,
+            &Batch {
+                edits: vec![Edit::CreateParameter(ParameterSpec {
+                    caption: "Selected Region".into(),
+                    datatype: DataType::String,
+                    value: serde_json::json!("All"),
+                    domain: ParameterDomain::Any,
+                    name: Some("[Selected Region]".into()),
+                })],
+            },
+            8 << 20,
+        )?;
+
+        let action = apply(
+            &parameterized.workbook,
+            &Batch {
+                edits: vec![Edit::CreateParameterAction(ParameterActionSpec {
+                    caption: "Set selected region".into(),
+                    dashboard: "Interactive".into(),
+                    source_sheet: "Trend".into(),
+                    source_field: "Region".into(),
+                    source_instance: Some("[none:Region:nk]".into()),
+                    target_parameter: "Selected Region".into(),
+                    run_on: ActionTrigger::Select,
+                })],
+            },
+            8 << 20,
+        )?;
+
+        assert!(action.text().contains("<edit-parameter-action"));
+        assert!(action.text().contains(r#"<agg-type type="attr"/>"#));
+        assert!(
+            action
+                .text()
+                .contains(r#"name="target-parameter" value="[Parameters].[Selected Region]""#)
+        );
+        assert!(action.text().contains(r#"<datasource name="Parameters"/>"#));
+        assert!(
+            action
+                .text()
+                .contains(r#"<datasource-dependencies datasource="Parameters">"#)
+        );
+        assert!(action_caption_exists(
+            &action.workbook,
+            "Filter other views"
+        )?);
+        assert!(action_caption_exists(
+            &action.workbook,
+            "Set selected region"
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn parameter_action_rejects_source_target_datatype_mismatch() -> Result<()> {
+        let base = dashboard_workbook()?;
+        let dashboard = apply(
+            &base,
+            &Batch {
+                edits: vec![Edit::CreateDashboard(DashboardSpec {
+                    name: "Interactive".into(),
+                    width: 1000,
+                    height: 700,
+                    padding: 0,
+                    background: None,
+                    view_styles: Vec::new(),
+                    layout: Layout::Sheet {
+                        sheet: "Trend".into(),
+                        show_title: None,
+                        fit: None,
+                    },
+                })],
+            },
+            8 << 20,
+        )?;
+        let parameterized = apply(
+            &dashboard.workbook,
+            &Batch {
+                edits: vec![Edit::CreateParameter(ParameterSpec {
+                    caption: "Numeric Target".into(),
+                    datatype: DataType::Integer,
+                    value: serde_json::json!(1),
+                    domain: ParameterDomain::Any,
+                    name: Some("[Numeric Target]".into()),
+                })],
+            },
+            8 << 20,
+        )?;
+        let error = match apply(
+            &parameterized.workbook,
+            &Batch {
+                edits: vec![Edit::CreateParameterAction(ParameterActionSpec {
+                    caption: "Invalid action".into(),
+                    dashboard: "Interactive".into(),
+                    source_sheet: "Trend".into(),
+                    source_field: "Region".into(),
+                    source_instance: Some("[none:Region:nk]".into()),
+                    target_parameter: "Numeric Target".into(),
+                    run_on: ActionTrigger::Select,
+                })],
+            },
+            8 << 20,
+        ) {
+            Ok(_) => {
+                return Err(Error::new(
+                    "TEST",
+                    "datatype-mismatched action was accepted",
+                ));
+            }
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "ACTION");
+        Ok(())
     }
 
     #[test]

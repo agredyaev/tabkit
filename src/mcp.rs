@@ -141,7 +141,7 @@ struct OpenWorkbookArgs {
 struct InspectArgs {
     /// Workbook handle returned by workbook_open or workbook_edit.
     handle: String,
-    /// datasource, connection, relation, field, calculation, worksheet, or dashboard.
+    /// datasource, connection, relation, field, calculation, parameter, worksheet, or dashboard.
     kind: String,
     /// Optional exact/substring name filter.
     query: Option<String>,
@@ -527,7 +527,7 @@ impl TapKitMcp {
     }
 
     #[tool(
-        description = "Apply a semantic calculation/dashboard edit batch locally and return a new candidate workbook handle. The source workbook is never overwritten."
+        description = "Apply a source-preserving semantic edit batch and return a new workbook handle. Supports calculations, parameters, minimal bar/line/KPI/text-table worksheets, dashboards, filter actions, and parameter actions. Referenced objects must already exist on the source handle; chain workbook_edit calls when one new object depends on another. The source handle is never overwritten."
     )]
     async fn workbook_edit(
         &self,
@@ -627,10 +627,15 @@ fn tool_error(error: Error) -> McpError {
         error.code,
         "ARGUMENT"
             | "AMBIGUOUS_PACKAGE"
+            | "ACTION"
+            | "ACTION_EXISTS"
+            | "ACTION_SOURCE_AMBIGUOUS"
+            | "ACTION_SOURCE_FIELD"
             | "CALCULATION"
             | "CALCULATION_EXISTS"
             | "DASHBOARD"
             | "DASHBOARD_EXISTS"
+            | "DASHBOARD_NOT_FOUND"
             | "DATASOURCE_NOT_FOUND"
             | "DUPLICATE_EDIT"
             | "DUPLICATE_STYLE"
@@ -649,6 +654,9 @@ fn tool_error(error: Error) -> McpError {
             | "LIMIT"
             | "LOCAL_PATHS_DISABLED"
             | "OUTPUT_EXISTS"
+            | "PARAMETER"
+            | "PARAMETER_EXISTS"
+            | "PARAMETER_NOT_FOUND"
             | "PATH"
             | "REFERENCE"
             | "STALE_BASE"
@@ -657,6 +665,8 @@ fn tool_error(error: Error) -> McpError {
             | "UNSAFE_FORMULA"
             | "VERSION"
             | "WORKBOOK_SHAPE"
+            | "WORKSHEET"
+            | "WORKSHEET_EXISTS"
             | "WORKSHEET_NOT_FOUND"
             | "XML"
             | "XML_SHAPE"
@@ -976,6 +986,11 @@ mod tests {
             "multiple_dropdown",
             "all_database",
             "fit_width",
+            "create_parameter",
+            "create_worksheet",
+            "create_filter_action",
+            "create_parameter_action",
+            "text_table",
         ] {
             assert!(
                 edit_schema.contains(expected),
@@ -1080,6 +1095,13 @@ mod tests {
         ));
         assert_eq!(invalid.code, rmcp::model::ErrorCode::INVALID_PARAMS);
         assert!(invalid.message.contains("WORKSHEET_NOT_FOUND"));
+
+        let parameter = tool_error(Error::new(
+            "PARAMETER_NOT_FOUND",
+            "Parameter \"Missing\" does not exist in this workbook",
+        ));
+        assert_eq!(parameter.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(parameter.message.contains("PARAMETER_NOT_FOUND"));
 
         let internal = tool_error(Error::new("INTERNAL", "Workbook cache lock is poisoned"));
         assert_eq!(internal.code, rmcp::model::ErrorCode::INTERNAL_ERROR);

@@ -39,15 +39,21 @@ ARGUMENT
 DATASOURCE_NOT_FOUND
 FIELD_NOT_FOUND
 WORKSHEET_NOT_FOUND
+WORKSHEET_EXISTS
 CALCULATION_EXISTS
+PARAMETER_NOT_FOUND
+PARAMETER_EXISTS
+ACTION_SOURCE_FIELD
+ACTION_SOURCE_AMBIGUOUS
 FILTER_FIELD_NOT_FOUND
 FILTER_INSTANCE_AMBIGUOUS
+DASHBOARD_NOT_FOUND
 DASHBOARD_EXISTS
 STYLE
 LAYOUT
 ```
 
-Messages identify the requested object or constraint. They do not use bare object names as the full message.
+Messages identify the requested object or constraint. They do not use bare object names as the full message. Unsupported parameter, worksheet, and action combinations are input/precondition failures and map to MCP `invalid_params`.
 
 ### Workbook and package admission
 

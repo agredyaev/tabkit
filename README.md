@@ -19,11 +19,13 @@ TapKit does not ship a second Tableau schema validator. It keeps a small typed p
 TapKit supports:
 
 - TWB and TWBX open/repack;
-- datasource, connection, relation, field, calculation, worksheet, and dashboard indexing;
+- datasource, connection, relation, field, calculation, parameter, worksheet, and dashboard indexing;
 - Initial SQL and Custom SQL lineage;
 - SQL Server local `#temp` lineage across Initial SQL and Custom SQL;
-- calculation creation;
+- calculation and parameter creation;
+- basic bar, line, KPI, and text-table worksheet creation from existing datasource fields;
 - dashboard creation from existing worksheets;
+- dashboard filter actions and parameter actions;
 - dashboard layout, filter cards, and bounded presentation styling;
 - Tableau workbook search and download;
 - Tableau `validateWorkbook`;
@@ -184,17 +186,24 @@ Supported edit operations:
 
 ```text
 create_calculation
+create_parameter
+create_worksheet
+create_filter_action
+create_parameter_action
 create_dashboard
 ```
 
-Dashboard creation uses existing worksheets. Supported dashboard primitives include nested rows/columns, fixed and weighted sizing, padding, gaps, text, worksheet zones, filter cards, and bounded worksheet presentation styles.
+Worksheet creation is intentionally narrow: bar, line, KPI, and text-table views over existing datasource fields. Dashboard creation supports nested rows/columns, fixed and weighted sizing, padding, gaps, text, worksheet zones, filter cards, and bounded worksheet presentation styles.
 
-Dashboard filter cards expose filters that already exist on the source worksheet. Cross-sheet/global `Apply to Worksheets` authoring is not synthesized.
+Dashboard filter cards expose filters that already exist on the source worksheet. Cross-sheet interaction is available through filter actions; TapKit does not synthesize persisted `Apply to Worksheets` sharing state.
+
+When a new object depends on another object created by TapKit, chain `workbook_edit` calls so the dependency exists on the source handle before it is referenced. See [Authoring](docs/AUTHORING.md).
 
 ## Current limits
 
-- worksheet/chart creation from scratch is not implemented;
+- worksheet authoring is limited to bar, line, KPI, and text-table views over existing fields;
 - arbitrary raw XML mutation is not exposed;
+- action authoring is limited to filter actions and parameter actions;
 - full action/set/story lineage is not implemented;
 - exact source-column attribution through arbitrary SQL expressions and mutations is incomplete;
 - SQL Server `##global` temp-table producer scope is not modeled;
@@ -207,7 +216,7 @@ Repository checks include:
 
 - `cargo fmt`;
 - Clippy with warnings denied;
-- release tests on Linux, macOS, and Windows;
+- release tests on Linux and Windows;
 - `cargo-deny` dependency, source, license, and advisory policy checks;
 - RustSec audit;
 - Dependabot for Cargo and GitHub Actions;
@@ -221,6 +230,7 @@ See [SECURITY.md](SECURITY.md).
 Technical documentation is under [`docs/`](docs/README.md):
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Authoring](docs/AUTHORING.md)
 - [Dashboard authoring](docs/DASHBOARD.md)
 - [Performance](docs/PERFORMANCE.md)
 - [Rust API map](docs/API.md)
