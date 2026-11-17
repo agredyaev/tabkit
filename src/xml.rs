@@ -1,8 +1,9 @@
-//! Source-backed XML index for TWB documents.
+//! Immutable, source-backed XML index for TWB documents.
 //!
-//! Nodes use preorder IDs and retain byte spans into the original UTF-8 source.
-//! Descendant ranges are contiguous, allowing bounded subtree traversal without
-//! constructing a full mutable DOM.
+//! Parsing records structure and byte spans without normalizing or reserializing
+//! the input. Node IDs are preorder positions local to one [`Document`], which
+//! makes every subtree a contiguous ID range and permits allocation-light
+//! traversal while the original UTF-8 source remains authoritative.
 
 use crate::{Error, Result, require};
 use serde::{Deserialize, Serialize};
@@ -12,14 +13,16 @@ use xmlparser::{ElementEnd, Token, Tokenizer};
 
 const NONE: u32 = u32::MAX;
 
-/// Stable preorder node identifier within one parsed document.
+/// Preorder node ID stable only for the lifetime of its originating [`Document`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
 
-/// Byte span into the original UTF-8 XML source.
+/// End-exclusive byte span into the original UTF-8 XML source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
+    /// Inclusive byte offset.
     pub start: u32,
+    /// Exclusive byte offset.
     pub end: u32,
 }
 
@@ -70,7 +73,7 @@ struct Frame {
     last_child: Option<NodeId>,
 }
 
-/// Immutable source-backed XML index.
+/// Parsed XML structure whose node/attribute spans always refer to the retained source string.
 pub struct Document {
     source: String,
     names: Vec<String>,
@@ -80,14 +83,21 @@ pub struct Document {
 }
 
 impl Document {
-    /// Parses UTF-8 XML bytes into the source-backed index.
+    /// Parses UTF-8 XML without reserialization or source normalization.
+    ///
+    /// Invalid UTF-8, malformed XML, unsupported document shape, and spans that
+    /// cannot be represented by the bounded index are rejected before a
+    /// `Document` is returned.
     pub fn parse(bytes: Vec<u8>) -> Result<Self> {
         let source =
             String::from_utf8(bytes).map_err(|_| Error::new("ENCODING", "TWB must be UTF-8"))?;
         Self::parse_string(source)
     }
 
-    /// Consumes XML text and builds the source-backed index.
+    /// Takes ownership of XML text and builds spans directly against that string.
+    ///
+    /// The retained string is the same source returned by [`Self::source`]; no
+    /// pretty-printing or entity normalization is applied to it.
     pub fn parse_string(source: String) -> Result<Self> {
         let mut names = Vec::<String>::new();
         let mut name_ids = HashMap::<String, u32>::new();
@@ -299,7 +309,10 @@ impl Document {
         self.children(id).find(|child| self.tag(*child) == tag)
     }
 
-    /// Iterates descendants using the node's contiguous preorder subtree range.
+    /// Iterates descendants in preorder without including `root` itself.
+    ///
+    /// This is valid because parsing records each subtree as one contiguous range
+    /// of document-local node IDs.
     pub fn descendants(&self, root: NodeId) -> Descendants<'_> {
         let node = self.nodes[root.0 as usize];
         Descendants {
@@ -323,6 +336,9 @@ impl Document {
         None
     }
 
+    /// Returns the exact encoded attribute slice from the original source.
+    ///
+    /// Use [`Self::attr`] when XML entity decoding is required.
     pub fn attr_raw(&self, id: NodeId, wanted: &str) -> Option<&str> {
         let node = self.nodes[id.0 as usize];
         let start = node.first_attr as usize;
@@ -332,6 +348,10 @@ impl Document {
         })
     }
 
+    /// Returns an attribute value with XML entities decoded on demand.
+    ///
+    /// A borrowed value is returned when decoding is unnecessary; otherwise the
+    /// decoded value is owned.
     pub fn attr(&self, id: NodeId, wanted: &str) -> Result<Option<Cow<'_, str>>> {
         self.attr_raw(id, wanted).map(decode_attribute).transpose()
     }
@@ -342,6 +362,10 @@ impl Document {
             .map(|span| &self.source[span.range()])
     }
 
+    /// Returns the source offset immediately before an element's closing tag.
+    ///
+    /// Self-closing elements have no insertion point of this form and return an
+    /// `XML_SHAPE` error rather than an approximate offset.
     pub fn closing_tag_start(&self, id: NodeId) -> Result<usize> {
         let at = self.nodes[id.0 as usize].closing_tag_start;
         if at == NONE {

@@ -1,7 +1,12 @@
-//! Typed semantic index over a Tableau TWB document.
+//! Typed semantic index over a source-backed Tableau TWB document.
 //!
-//! The index contains only the entities TapKit needs for inspection, lineage,
-//! and supported edits. The original XML remains authoritative and source-backed.
+//! The index is deliberately partial: it models only entities needed by
+//! inspection, lineage, and supported edits. The original [`Document`] remains
+//! authoritative for structure and bytes that are not represented here.
+//!
+//! All dense IDs in this module are local to one `Workbook` instance. Reparsing
+//! a candidate rebuilds the index, so IDs must never be persisted or carried
+//! across workbook snapshots.
 
 use crate::{
     Error, Result, TABLEAU_PRODUCT_TARGET, TWB_VERSION, require,
@@ -13,25 +18,25 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-/// Dense datasource identifier within one workbook index.
+/// Dense workbook-local datasource ID; invalid across reparses or other workbooks.
 pub struct DatasourceId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-/// Dense connection identifier within one workbook index.
+/// Dense workbook-local connection ID; invalid across reparses or other workbooks.
 pub struct ConnectionId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-/// Dense relation identifier within one workbook index.
+/// Dense workbook-local relation ID; invalid across reparses or other workbooks.
 pub struct RelationId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-/// Dense field identifier within one workbook index.
+/// Dense workbook-local field ID; invalid across reparses or other workbooks.
 pub struct FieldId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-/// Dense calculation identifier within one workbook index.
+/// Dense workbook-local calculation ID; invalid across reparses or other workbooks.
 pub struct CalculationId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-/// Dense worksheet identifier within one workbook index.
+/// Dense workbook-local worksheet ID; invalid across reparses or other workbooks.
 pub struct WorksheetId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-/// Dense dashboard identifier within one workbook index.
+/// Dense workbook-local dashboard ID; invalid across reparses or other workbooks.
 pub struct DashboardId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -141,6 +146,7 @@ impl FieldType {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// Distinguishes source connections from extract-internal connections.
 pub enum ConnectionScope {
     Source,
     Extract,
@@ -253,7 +259,7 @@ enum ExactField {
     Ambiguous,
 }
 
-/// Parsed TWB plus the typed semantic indexes used by TapKit.
+/// One immutable TWB snapshot: authoritative source XML plus derived semantic indexes.
 pub struct Workbook {
     pub xml: Document,
     pub datasources: Vec<Datasource>,
@@ -272,12 +278,19 @@ pub struct Workbook {
 }
 
 impl Workbook {
-    /// Parses UTF-8 TWB bytes and builds the typed semantic index.
+    /// Admits UTF-8 TWB bytes and builds the semantic index.
+    ///
+    /// The root must be `<workbook>` and `workbook/@version` must equal
+    /// [`TWB_VERSION`]. Unknown Tableau constructs remain in
+    /// the source-backed XML even when this index does not model them.
     pub fn open(bytes: Vec<u8>) -> Result<Self> {
         Self::open_document(Document::parse(bytes)?)
     }
 
-    /// Consumes TWB XML text and builds the typed semantic index without an extra copy.
+    /// Takes ownership of TWB XML text and applies the same admission contract as [`Self::open`].
+    ///
+    /// Ownership avoids an additional source copy; it does not relax version or
+    /// structural checks.
     pub fn open_string(source: String) -> Result<Self> {
         Self::open_document(Document::parse_string(source)?)
     }
@@ -569,7 +582,10 @@ impl Workbook {
         })
     }
 
-    /// Returns object counts and workbook version information.
+    /// Summarizes the indexed subset of this workbook snapshot.
+    ///
+    /// Counts describe TapKit's semantic index, not the full set of XML elements
+    /// permitted by Tableau's schema.
     pub fn summary(&self) -> Summary {
         Summary {
             version: TWB_VERSION.into(),
@@ -616,12 +632,19 @@ impl Workbook {
     }
 }
 
-/// Inspects indexed workbook objects with the default result limit.
+/// Inspects the indexed semantic subset without truncating matches.
+///
+/// Exact case-insensitive name/caption matches suppress substring fallback. Use
+/// [`inspect_limited`] on agent-facing or otherwise bounded paths.
 pub fn inspect(book: &Workbook, kind: &str, query: Option<&str>) -> Result<serde_json::Value> {
     inspect_limited(book, kind, query, usize::MAX)
 }
 
-/// Inspects indexed workbook objects with an explicit result bound.
+/// Inspects indexed objects with exact-first lookup and an explicit output bound.
+///
+/// `kind` must be one of the semantic object kinds supported by this index.
+/// `limit` bounds returned items but `total` still reports the number of matches;
+/// the result sets `truncated` when additional matches were omitted.
 pub fn inspect_limited(
     book: &Workbook,
     kind: &str,

@@ -1,25 +1,36 @@
-//! Tableau formula lexical/reference extraction.
+//! Bounded lexical analysis for Tableau formulas.
 //!
-//! This module extracts field references and performs bounded lexical checks.
-//! It is intentionally not a Tableau expression evaluator.
+//! The analyzer exists to validate editor preconditions and discover bracketed
+//! field references. It is intentionally not a Tableau parser or evaluator and
+//! therefore does not claim semantic validity; final semantics remain Tableau's
+//! responsibility.
+//!
+//! External SQL/script/model-extension functions are rejected by the editing
+//! boundary rather than passed through as opaque executable content.
 use crate::{Error, Result, require};
 use serde::Serialize;
 
-/// Field reference extracted from a Tableau formula.
+/// Bracketed field reference discovered outside strings, comments, and date literals.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Reference {
     pub datasource: Option<String>,
     pub field: String,
 }
 
-/// Lexical analysis result for a Tableau formula.
+/// Deduplicated references plus non-fatal runtime-state warnings.
 #[derive(Debug)]
 pub struct Analysis {
     pub references: Vec<Reference>,
     pub warnings: Vec<String>,
 }
 
-/// Extracts field references and lexical warnings from a bounded formula string.
+/// Performs the lexical checks required before TapKit authors a calculation.
+///
+/// Input is limited to 128 KiB. The scan rejects malformed lexical structure,
+/// statement separators, NUL, and external execution functions. Successful
+/// analysis does **not** mean Tableau will accept or evaluate the formula; it
+/// establishes only the local editing preconditions and extracts deduplicated
+/// field references.
 pub fn analyze(source: &str) -> Result<Analysis> {
     require(
         !source.trim().is_empty() && source.len() <= 128 * 1024,
@@ -175,7 +186,11 @@ pub fn analyze(source: &str) -> Result<Analysis> {
     })
 }
 
-/// Parses a qualified Tableau reference into datasource and field names.
+/// Parses exactly one Tableau `[datasource].[field]` reference.
+///
+/// Both components must be bracketed and the input may contain only surrounding
+/// whitespace. The returned field is normalized back to Tableau bracket syntax,
+/// including escaped closing brackets.
 pub fn qualified(source: &str) -> Result<(String, String)> {
     let source = source.trim();
     require(

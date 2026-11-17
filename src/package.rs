@@ -1,7 +1,12 @@
-//! TWB/TWBX package admission and source-preserving repack.
+//! TWB/TWBX admission and source-preserving repack.
 //!
-//! Package handling enforces file/ZIP limits, rejects unsafe archive entries,
-//! detects stale input, and preserves unrelated TWBX entries during edits.
+//! Opening a package establishes a snapshot contract: its hash and, for TWBX,
+//! entry metadata are retained so later writes can detect a stale source.
+//! Archive paths, entry count, expanded size, compression ratio, symlinks, and
+//! duplicate/case-colliding names are rejected before the embedded TWB is used.
+//!
+//! Repacking changes only the embedded TWB. Unrelated TWBX entries must retain
+//! their order, names, sizes, compression, and compressed bytes.
 
 use crate::{Error, Result, require};
 use serde::Serialize;
@@ -14,7 +19,7 @@ use std::{
 };
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-/// Resource limits applied while opening and repacking workbook files.
+/// Hard admission limits shared by package I/O and REST transfer paths.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     pub xml_bytes: u64,
@@ -49,7 +54,7 @@ struct Entry {
     compressed_sha256: String,
 }
 
-/// Admitted TWB/TWBX package with stale-base and preservation metadata.
+/// Snapshot of an admitted package used to enforce stale-base and preservation checks.
 pub struct Package {
     pub path: PathBuf,
     pub kind: Kind,
@@ -59,7 +64,13 @@ pub struct Package {
 }
 
 impl Package {
-    /// Opens a TWB/TWBX package and returns the embedded TWB bytes.
+    /// Admits a TWB/TWBX file and captures the snapshot required for safe edits.
+    ///
+    /// For TWB the file is read under `xml_bytes` and re-hashed to reject a
+    /// concurrent change. For TWBX every archive entry is checked before the
+    /// single embedded TWB is returned, and the package is re-hashed after
+    /// indexing. A successful `Package` therefore represents the exact source
+    /// bytes observed during admission.
     pub fn open(path: &Path, limits: &Limits) -> Result<(Self, Vec<u8>)> {
         require(
             std::fs::metadata(path)?.len() <= limits.file_bytes,
@@ -197,7 +208,14 @@ impl Package {
         }
     }
 
-    /// Writes a candidate package while preserving unrelated TWBX entries.
+    /// Writes a candidate only if the admitted source snapshot is still current.
+    ///
+    /// The output must keep the source package type and must not already exist.
+    /// TWBX output replaces only the embedded TWB; all unrelated compressed entry
+    /// bytes are verified unchanged before the temporary file is persisted.
+    /// The source hash is checked both before and after repacking, so a concurrent
+    /// source modification fails with `STALE_BASE` instead of producing a mixed
+    /// candidate.
     pub fn write_candidate(&self, output: &Path, twb: &[u8], limits: &Limits) -> Result<Self> {
         require(
             twb.len() as u64 <= limits.xml_bytes,
@@ -338,7 +356,10 @@ impl Package {
     }
 }
 
-/// Computes a bounded SHA-256 hash for a file.
+/// Hashes a file while enforcing the same byte bound used by callers for admission.
+///
+/// The function fails once the observed stream exceeds `max_bytes`; it never
+/// hashes an unbounded file and then checks the size afterward.
 pub fn hash_file(path: &Path, max_bytes: u64) -> Result<String> {
     let mut file = File::open(path)?;
     let mut hash = Sha256::new();

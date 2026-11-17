@@ -1,8 +1,12 @@
-//! Tableau REST 3.29 client used by TapKit.
+//! Tableau REST 3.29 boundary for server-backed operations.
 //!
-//! The client covers PAT sign-in, workbook search/download, `validateWorkbook`,
-//! multipart publish, job polling, and sign-out. Tableau remains the authority
-//! for XSD and semantic workbook validation.
+//! This client is deliberately narrow: PAT sign-in, workbook discovery/download,
+//! `validateWorkbook`, multipart publish, job lookup, and sign-out. Configuration
+//! is pinned to REST 3.29 and HTTPS. Redirects are disabled.
+//!
+//! Tableau is the authority for XSD and semantic workbook validation. Local
+//! package checks establish file safety/preservation; they are not a substitute
+//! for `validateWorkbook`.
 
 use crate::{
     Error, REST_API_VERSION, Result, TABLEAU_PRODUCT_TARGET,
@@ -24,18 +28,25 @@ use std::{
     time::Duration,
 };
 
-/// Tableau REST connection and PAT configuration.
+/// Tableau REST connection contract.
 #[derive(Clone)]
 pub struct Config {
+    /// Absolute HTTPS Tableau Server base URL.
     pub server: String,
+    /// Tableau site content URL used during sign-in.
     pub site: String,
+    /// Must equal [`REST_API_VERSION`]; other versions are rejected.
     pub api_version: String,
+    /// Personal access token name sent to Tableau.
     pub pat_name: String,
+    /// Environment-variable name containing the PAT secret, never the secret itself.
     pub pat_secret_env: String,
+    /// Whole-request timeout; connection establishment also has a fixed 15-second cap.
     pub timeout: Duration,
 }
 
 impl Config {
+    /// Validates the static compatibility/security contract without making a request.
     pub fn validate(&self) -> Result<()> {
         let url = Url::parse(&self.server)
             .map_err(|_| Error::new("CONFIG", "Invalid Tableau server URL"))?;
@@ -64,7 +75,7 @@ impl Config {
     }
 }
 
-/// Authenticated Tableau REST 3.29 client.
+/// Authenticated REST 3.29 session bound to one Tableau site.
 pub struct Rest {
     config: Config,
     client: Client,
@@ -97,7 +108,11 @@ pub struct Validation {
 }
 
 impl Rest {
-    /// Signs in with a personal access token read from the configured environment variable.
+    /// Creates an HTTPS-only Tableau session from PAT configuration.
+    ///
+    /// The secret is read from `Config::pat_secret_env`; it is not stored in the
+    /// configuration value or surfaced in TapKit errors. Redirects are disabled
+    /// so credentials are never forwarded to a different origin.
     pub fn sign_in(config: Config) -> Result<Self> {
         config.validate()?;
         let client = Client::builder()
@@ -160,7 +175,11 @@ impl Rest {
         })
     }
 
-    /// Searches workbooks by exact or partial name.
+    /// Searches exact name first, then bounded case-insensitive substring fallback.
+    ///
+    /// `limit` must be 1..=100. If Tableau returns no exact match, at most ten
+    /// 1,000-item pages are scanned; the method does not claim exhaustive search
+    /// beyond that bound.
     pub fn search_workbooks(&self, query: &str, limit: usize) -> Result<Vec<WorkbookInfo>> {
         let query = query.trim();
         require(
@@ -221,6 +240,10 @@ impl Rest {
         Ok(results)
     }
 
+    /// Downloads to a unique file after detecting the actual TWB/TWBX payload type.
+    ///
+    /// Bytes are streamed under `Limits::file_bytes`, hashed while written, then
+    /// admitted through [`Package::open`] before the path is returned.
     pub fn download_workbook_auto(
         &self,
         workbook_id: &str,
@@ -303,6 +326,10 @@ impl Rest {
         ))
     }
 
+    /// Downloads to an explicit non-existing path and verifies its extension matches the payload.
+    ///
+    /// The file becomes visible at `output` only after bounded streaming, hashing,
+    /// package admission, and a no-clobber persist succeed.
     pub fn download_workbook(
         &self,
         workbook_id: &str,
@@ -391,7 +418,11 @@ impl Rest {
         })
     }
 
-    /// Sends TWB XML to Tableau `validateWorkbook` for XSD and semantic validation.
+    /// Sends the admitted TWB XML to Tableau's authoritative validation endpoint.
+    ///
+    /// For TWBX input only the embedded TWB is submitted. HTTP 422 is represented
+    /// as `Ok(Validation { valid: false, .. })`; transport/auth/server failures are
+    /// errors. Packaged resources are outside this endpoint's validation scope.
     pub fn validate_workbook(&self, path: &Path, limits: &Limits) -> Result<Validation> {
         let (_package, twb) = Package::open(path, limits)?;
         let part = multipart::Part::bytes(twb)
@@ -428,6 +459,12 @@ impl Rest {
         }
     }
 
+    /// Starts an asynchronous publish from an admitted, stable package snapshot.
+    ///
+    /// Upload blocks are 8 MiB. The source is hashed before upload and again
+    /// afterward; any concurrent change fails with `STALE_BASE` before commit.
+    /// The returned JSON is Tableau's publish/job response; this method does not
+    /// wait for job completion.
     pub fn publish_workbook(
         &self,
         path: &Path,
@@ -532,7 +569,7 @@ impl Rest {
         )
     }
 
-    /// Returns the current Tableau background-job response.
+    /// Reads one background-job snapshot; it does not poll or wait for a terminal state.
     pub fn job(&self, job_id: &str) -> Result<Value> {
         self.send_json(
             "Read Tableau background job",
@@ -540,7 +577,7 @@ impl Rest {
         )
     }
 
-    /// Invalidates the current Tableau session token.
+    /// Consumes the client and asks Tableau to invalidate its session token.
     pub fn sign_out(self) -> Result<()> {
         let url = api_url(&self.config, None, &["auth", "signout"])?;
         let token = HeaderValue::from_str(&self.token)

@@ -1,8 +1,13 @@
-//! MCP server integration built on the `rmcp` Rust implementation.
+//! MCP transport adapter and workbook-session owner.
 //!
-//! This module owns workbook sessions and maps MCP tools to package, workbook,
-//! lineage, edit, validation, and publish operations. MCP framing and transport
-//! semantics are provided by `rmcp`, not reimplemented here.
+//! `rmcp` owns protocol framing. TapKit owns semantic tool behavior, bounded
+//! workbook handles, temporary candidate/download files, and mapping of TapKit
+//! error codes to MCP categories.
+//!
+//! A handle keeps one immutable workbook snapshot alive. Edits create a new
+//! handle rather than mutating the source. TapKit-owned files are deleted only
+//! after the final in-flight `Arc<Session>` is released; user-supplied local files
+//! are never deleted by handle cleanup.
 
 use crate::{
     Error, Result as TapResult,
@@ -108,7 +113,7 @@ struct State {
     allow_local_paths: bool,
 }
 
-/// MCP server implementation and shared session state.
+/// Cloneable MCP facade over one shared bounded session/workspace state.
 #[derive(Clone)]
 pub struct TapKitMcp {
     state: Arc<State>,
@@ -192,7 +197,13 @@ struct PublishArgs {
 }
 
 impl TapKitMcp {
-    /// Creates an MCP server with optional Tableau REST configuration.
+    /// Creates shared MCP state without authenticating to Tableau.
+    ///
+    /// Tableau configuration is validated immediately but sign-in is lazy on the
+    /// first server-backed tool call. `allow_local_paths` controls only
+    /// `workbook_open(path=...)`; downloaded and edited candidates always live in
+    /// TapKit's private temporary workspace. At most 64 workbook sessions may be
+    /// alive concurrently.
     pub fn new(tableau_config: Option<rest::Config>, allow_local_paths: bool) -> TapResult<Self> {
         if let Some(config) = &tableau_config {
             config.validate()?;
@@ -666,6 +677,10 @@ fn json_result(value: &impl serde::Serialize) -> std::result::Result<CallToolRes
     Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
 }
 
+/// Serves MCP over stdio until the transport closes.
+///
+/// Protocol framing and lifecycle are delegated to `rmcp`; TapKit only maps
+/// transport failures into the public `MCP` error class.
 pub async fn serve_stdio(server: TapKitMcp) -> TapResult<()> {
     use rmcp::{ServiceExt, transport::stdio};
 
@@ -705,6 +720,11 @@ fn http_router(server: TapKitMcp, bearer_token: Option<String>) -> axum::Router 
     }
 }
 
+/// Serves stateless streamable HTTP MCP on `/mcp` until Ctrl-C or server failure.
+///
+/// When `bearer_token` is present, every MCP request must match it exactly.
+/// Passing `None` installs no authentication layer; callers are responsible for
+/// restricting such a listener to a trusted/loopback boundary.
 pub async fn serve_http(
     server: TapKitMcp,
     bind: std::net::SocketAddr,

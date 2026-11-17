@@ -1,8 +1,12 @@
-//! Workbook lineage graph construction and traversal.
+//! Evidence-backed workbook lineage graph.
 //!
-//! Lineage is built from the typed workbook index. Unsupported or ambiguous
-//! provenance is reported through explicit gaps instead of inferred silently.
-//! SQL Server local `#temp` tables are scoped to the Tableau connection.
+//! Edges are emitted only when the workbook structure or supported SQL analysis
+//! proves a relationship. Unsupported, ambiguous, or partial provenance becomes
+//! an explicit [`Gap`]; TapKit never fills a gap with a guessed edge.
+//!
+//! SQL Server local `#temp` tables are connection-scoped. They may link Initial
+//! SQL producers to Custom SQL consumers only within the same Tableau connection;
+//! global temp tables are reported as unsupported coverage instead.
 
 use crate::{
     Error, Result, formula,
@@ -23,7 +27,7 @@ use std::{
     ops::ControlFlow,
 };
 
-/// Lineage node category.
+/// Semantic category used to type graph nodes and search filters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -68,7 +72,7 @@ impl std::str::FromStr for Kind {
     }
 }
 
-/// Semantic relationship between two lineage nodes.
+/// Evidence-backed relationship; direction is from dependency/source toward consumer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
@@ -90,7 +94,7 @@ pub enum EdgeKind {
     SheetInDashboard,
 }
 
-/// One named object in the lineage graph.
+/// Workbook object represented by a graph-local dense ID.
 #[derive(Clone, Debug, Serialize)]
 pub struct Node {
     pub id: u32,
@@ -105,7 +109,7 @@ pub struct Edge {
     pub kind: EdgeKind,
 }
 
-/// Explicit coverage gap where lineage could not be proven safely.
+/// Machine-readable record that provenance was intentionally left unresolved.
 #[derive(Clone, Debug, Serialize)]
 pub struct Gap {
     pub code: &'static str,
@@ -133,7 +137,7 @@ enum ExactNode {
     Ambiguous,
 }
 
-/// Indexed lineage graph for one workbook.
+/// Immutable graph plus explicit coverage gaps for one parsed workbook snapshot.
 pub struct Lineage {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
@@ -157,18 +161,25 @@ impl Adjacency {
 }
 
 impl Lineage {
-    /// Builds lineage from the workbook typed index.
+    /// Builds a graph without inventing provenance for unsupported structures.
+    ///
+    /// Successful construction does not imply complete lineage: callers must also
+    /// inspect [`Lineage::gaps`] when completeness matters.
     pub fn build(book: &Workbook) -> Result<Self> {
         let mut builder = Builder::new(book);
         builder.build()?;
         Ok(builder.finish())
     }
 
-    /// Finds nodes by exact name first, then case-insensitive substring fallback.
+    /// Resolves names case-insensitively, preferring exact matches over substrings.
+    ///
+    /// If at least one exact match exists, partial matches are suppressed. This
+    /// keeps a precise object request from being widened silently.
     pub fn find(&self, text: &str) -> Vec<&Node> {
         self.find_kind(text, None)
     }
 
+    /// Applies the same exact-first lookup as [`Self::find`] with an optional kind filter.
     pub fn find_kind(&self, text: &str, kind: Option<Kind>) -> Vec<&Node> {
         if let Some(ExactNode::One(id)) = self.exact_names.get(&ascii_case_hash(text))
             && let Some(node) = self.nodes.get(*id as usize)
@@ -193,11 +204,19 @@ impl Lineage {
         if exact.is_empty() { partial } else { exact }
     }
 
+    /// Traverses all reachable proven edges from a graph-local node ID.
+    ///
+    /// Returns `None` when the node ID is not part of this graph. Coverage gaps
+    /// remain separate metadata and are never converted into traversal edges.
     pub fn trace(&self, node_id: u32, direction: Direction) -> Option<Trace<'_>> {
         self.trace_limited(node_id, direction, usize::MAX)
     }
 
-    /// Traverses upstream or downstream lineage with an explicit node bound.
+    /// Traverses proven lineage while bounding the number of returned nodes.
+    ///
+    /// The root counts toward `max_nodes`; zero therefore returns `None`. When
+    /// additional reachable nodes exist beyond the bound, `Trace::truncated` is
+    /// set rather than silently dropping the fact that traversal was incomplete.
     pub fn trace_limited(
         &self,
         node_id: u32,

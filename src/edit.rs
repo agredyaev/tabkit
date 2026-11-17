@@ -1,8 +1,13 @@
-//! Typed workbook edit operations.
+//! Typed, source-preserving workbook edits.
 //!
-//! This module validates supported semantic edits, lowers them to bounded XML
-//! patches, reparses the candidate workbook, and returns a verified candidate.
-//! It does not expose arbitrary raw XML mutation.
+//! An edit batch is evaluated against one immutable [`Workbook`] base. TapKit
+//! validates semantic preconditions first, lowers accepted operations to
+//! non-overlapping expected-source patches, applies them as one candidate, then
+//! reparses and checks operation-specific postconditions.
+//!
+//! The base workbook is never mutated. Raw XML mutation is deliberately not part
+//! of this API; unsupported Tableau constructs fail closed rather than being
+//! approximated.
 
 use crate::{
     Error, Result, formula,
@@ -22,14 +27,14 @@ use std::{
 
 const CANVAS: u32 = 100_000;
 
-/// Ordered semantic edits applied against one workbook base.
+/// Atomic semantic edit plan evaluated against one workbook base.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Batch {
     pub edits: Vec<Edit>,
 }
 
-/// Supported semantic edit operations.
+/// Operations for which TapKit implements both admission checks and postconditions.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Edit {
@@ -37,7 +42,7 @@ pub enum Edit {
     CreateDashboard(DashboardSpec),
 }
 
-/// Parameters for creating a datasource calculation.
+/// Contract for a new calculation in an existing inline datasource.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CalculationSpec {
@@ -51,7 +56,7 @@ pub struct CalculationSpec {
     pub name: Option<String>,
 }
 
-/// Parameters for creating a dashboard from existing worksheets.
+/// Fixed-size dashboard specification built only from already indexed worksheets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DashboardSpec {
@@ -66,7 +71,7 @@ pub struct DashboardSpec {
     pub layout: Layout,
 }
 
-/// Recursive dashboard layout tree.
+/// Recursive layout tree normalized onto TapKit's fixed 100,000-unit canvas.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Layout {
@@ -197,7 +202,7 @@ pub struct LineStyle {
     pub width: Option<u32>,
 }
 
-/// Deterministic summary of an accepted edit batch.
+/// Deterministic receipt for a reparsed candidate.
 #[derive(Debug, Serialize)]
 pub struct Receipt {
     pub sha256: String,
@@ -205,14 +210,14 @@ pub struct Receipt {
     pub dashboards: Vec<String>,
 }
 
-/// Reparsing-verified workbook candidate produced by [`apply`].
+/// Detached candidate whose XML has been reparsed and whose edit postconditions hold.
 pub struct Candidate {
     pub workbook: Workbook,
     pub receipt: Receipt,
 }
 
 impl Candidate {
-    /// Returns the candidate TWB XML text.
+    /// Borrows the exact TWB source represented by `workbook` and `receipt.sha256`.
     pub fn text(&self) -> &str {
         self.workbook.xml.source()
     }
@@ -241,7 +246,20 @@ struct ZoneRenderer<'a> {
     next_id: u32,
 }
 
-/// Applies a typed edit batch and reparses the resulting workbook before returning it.
+/// Produces a verified candidate without mutating `book`.
+///
+/// # Invariants
+///
+/// * every edit is validated against the same base plus explicitly planned
+///   same-batch calculations;
+/// * generated patches are non-overlapping and satisfy expected-source
+///   preconditions;
+/// * the candidate remains within `max_bytes`;
+/// * the resulting XML is reparsed, and created calculations/dashboards must be
+///   present in the rebuilt semantic index before success is returned.
+///
+/// Failure is atomic from the caller's perspective: no partially edited
+/// [`Workbook`] is returned and the input workbook is unchanged.
 pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate> {
     require(
         !batch.edits.is_empty(),

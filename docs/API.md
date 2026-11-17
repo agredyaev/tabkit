@@ -63,3 +63,11 @@ REST_API_VERSION       = 3.29
 ```
 
 These values are treated as one compatibility boundary.
+
+## Rustdoc policy
+
+Rustdoc documents contracts that are not recoverable from a signature: invariants, ownership/lifetime rules, bounds, validation authority, failure semantics, and postconditions. It should not restate a function or field name in prose.
+
+Public documentation must also preserve architectural boundaries. In particular, it must not imply that the local semantic index is a complete Tableau object model, that local checks replace `validateWorkbook`, or that workbook-local/node-local IDs survive reparsing.
+
+CI builds Rustdoc with warnings denied so broken links and other Rustdoc diagnostics fail the quality job.
