@@ -1,3 +1,8 @@
+//! Typed semantic index over a Tableau TWB document.
+//!
+//! The index contains only the entities TapKit needs for inspection, lineage,
+//! and supported edits. The original XML remains authoritative and source-backed.
+
 use crate::{
     Error, Result, TABLEAU_PRODUCT_TARGET, TWB_VERSION, require,
     text::{FastHashMap, ascii_case_hash, contains_case_insensitive},
@@ -8,22 +13,30 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+/// Dense datasource identifier within one workbook index.
 pub struct DatasourceId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+/// Dense connection identifier within one workbook index.
 pub struct ConnectionId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+/// Dense relation identifier within one workbook index.
 pub struct RelationId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+/// Dense field identifier within one workbook index.
 pub struct FieldId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+/// Dense calculation identifier within one workbook index.
 pub struct CalculationId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+/// Dense worksheet identifier within one workbook index.
 pub struct WorksheetId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+/// Dense dashboard identifier within one workbook index.
 pub struct DashboardId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+/// Tableau field datatype normalized for supported edits and inspection.
 pub enum DataType {
     Unknown,
     Integer,
@@ -71,6 +84,7 @@ impl DataType {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+/// Tableau field role.
 pub enum Role {
     Dimension,
     Measure,
@@ -97,6 +111,7 @@ impl Role {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+/// Tableau field semantic type.
 pub enum FieldType {
     Nominal,
     Ordinal,
@@ -133,6 +148,7 @@ pub enum ConnectionScope {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// Relation category represented in the typed workbook index.
 pub enum RelationKind {
     PhysicalTable,
     CustomSql,
@@ -237,6 +253,7 @@ enum ExactField {
     Ambiguous,
 }
 
+/// Parsed TWB plus the typed semantic indexes used by TapKit.
 pub struct Workbook {
     pub xml: Document,
     pub datasources: Vec<Datasource>,
@@ -255,10 +272,12 @@ pub struct Workbook {
 }
 
 impl Workbook {
+    /// Parses UTF-8 TWB bytes and builds the typed semantic index.
     pub fn open(bytes: Vec<u8>) -> Result<Self> {
         Self::open_document(Document::parse(bytes)?)
     }
 
+    /// Consumes TWB XML text and builds the typed semantic index without an extra copy.
     pub fn open_string(source: String) -> Result<Self> {
         Self::open_document(Document::parse_string(source)?)
     }
@@ -550,6 +569,7 @@ impl Workbook {
         })
     }
 
+    /// Returns object counts and workbook version information.
     pub fn summary(&self) -> Summary {
         Summary {
             version: TWB_VERSION.into(),
@@ -596,10 +616,12 @@ impl Workbook {
     }
 }
 
+/// Inspects indexed workbook objects with the default result limit.
 pub fn inspect(book: &Workbook, kind: &str, query: Option<&str>) -> Result<serde_json::Value> {
     inspect_limited(book, kind, query, usize::MAX)
 }
 
+/// Inspects indexed workbook objects with an explicit result bound.
 pub fn inspect_limited(
     book: &Workbook,
     kind: &str,

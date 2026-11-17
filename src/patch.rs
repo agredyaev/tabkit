@@ -1,6 +1,12 @@
+//! Bounded source-preserving text patch application.
+//!
+//! Patches carry an expected source slice and are admitted only when ranges do
+//! not overlap and the resulting candidate remains within configured limits.
+
 use crate::{Error, Result, require, xml::Span};
 use serde::{Deserialize, Serialize};
 
+/// One expected-source replacement over a byte span.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Patch {
@@ -10,6 +16,7 @@ pub struct Patch {
     pub reason: String,
 }
 
+/// Applies admitted non-overlapping patches and verifies unchanged regions.
 pub fn apply(input: &str, patches: &[Patch], max_bytes: u64) -> Result<String> {
     let (sorted, output_len) = admitted_layout(input, patches, max_bytes)?;
     let mut output = String::new();

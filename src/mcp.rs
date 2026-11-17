@@ -1,3 +1,9 @@
+//! MCP server integration built on the `rmcp` Rust implementation.
+//!
+//! This module owns workbook sessions and maps MCP tools to package, workbook,
+//! lineage, edit, validation, and publish operations. MCP framing and transport
+//! semantics are provided by `rmcp`, not reimplemented here.
+
 use crate::{
     Error, Result as TapResult,
     edit::{self, Batch},
@@ -102,6 +108,7 @@ struct State {
     allow_local_paths: bool,
 }
 
+/// MCP server implementation and shared session state.
 #[derive(Clone)]
 pub struct TapKitMcp {
     state: Arc<State>,
@@ -185,6 +192,7 @@ struct PublishArgs {
 }
 
 impl TapKitMcp {
+    /// Creates an MCP server with optional Tableau REST configuration.
     pub fn new(tableau_config: Option<rest::Config>, allow_local_paths: bool) -> TapResult<Self> {
         if let Some(config) = &tableau_config {
             config.validate()?;
@@ -211,7 +219,10 @@ impl TapKitMcp {
                 .map_err(|_| Error::new("INTERNAL", "Tableau client lock is poisoned"))?;
             if slot.is_none() {
                 let config = self.state.tableau_config.clone().ok_or_else(|| {
-                    Error::new("TABLEAU_NOT_CONFIGURED", "Tableau REST is not configured")
+                    Error::new(
+                        "TABLEAU_NOT_CONFIGURED",
+                        "Tableau-backed tools are unavailable because this MCP server has no Tableau REST configuration",
+                    )
                 })?;
                 *slot = Some(Arc::new(Rest::sign_in(config)?));
             }
@@ -345,7 +356,7 @@ impl TapKitMcp {
                 if !self.state.allow_local_paths {
                     return Err(Error::new(
                         "LOCAL_PATHS_DISABLED",
-                        "Local paths are disabled for this MCP server",
+                        "This MCP server does not accept local workbook paths; use workbook_id or start the server with local paths enabled",
                     ));
                 }
                 self.insert_path(PathBuf::from(path), false)
@@ -594,7 +605,59 @@ impl ServerHandler for TapKitMcp {
 }
 
 fn tool_error(error: Error) -> McpError {
-    McpError::internal_error(format!("{}: {}", error.code, error.message), None)
+    let message = format!("{}: {}", error.code, error.message);
+    let data = Some(json!({ "tapkit_code": error.code }));
+
+    if error.code == "HANDLE_NOT_FOUND" {
+        return McpError::resource_not_found(message, data);
+    }
+
+    if matches!(
+        error.code,
+        "ARGUMENT"
+            | "AMBIGUOUS_PACKAGE"
+            | "CALCULATION"
+            | "CALCULATION_EXISTS"
+            | "DASHBOARD"
+            | "DASHBOARD_EXISTS"
+            | "DATASOURCE_NOT_FOUND"
+            | "DUPLICATE_EDIT"
+            | "DUPLICATE_STYLE"
+            | "EMPTY_BATCH"
+            | "ENCODING"
+            | "FIELD_NOT_FOUND"
+            | "FILE_TYPE"
+            | "FILTER"
+            | "FILTER_FIELD_NOT_FOUND"
+            | "FILTER_INSTANCE_AMBIGUOUS"
+            | "FILTER_INSTANCE_NOT_FOUND"
+            | "FILTER_NOT_ON_SHEET"
+            | "FORMAT"
+            | "FORMULA"
+            | "LAYOUT"
+            | "LIMIT"
+            | "LOCAL_PATHS_DISABLED"
+            | "OUTPUT_EXISTS"
+            | "PATH"
+            | "REFERENCE"
+            | "STALE_BASE"
+            | "STALE_PRECONDITION"
+            | "STYLE"
+            | "UNSAFE_FORMULA"
+            | "VERSION"
+            | "WORKBOOK_SHAPE"
+            | "WORKSHEET_NOT_FOUND"
+            | "XML"
+            | "XML_SHAPE"
+            | "ZIP_DUPLICATE"
+            | "ZIP_LIMIT"
+            | "ZIP_PATH"
+            | "ZIP_SYMLINK"
+    ) {
+        McpError::invalid_params(message, data)
+    } else {
+        McpError::internal_error(message, data)
+    }
 }
 
 fn json_result(value: &impl serde::Serialize) -> std::result::Result<CallToolResult, McpError> {
@@ -973,5 +1036,40 @@ mod tests {
             .expect("close text");
         let closed: Value = serde_json::from_str(close_text).expect("close JSON");
         assert_eq!(closed["closed"], true);
+    }
+
+    #[test]
+    fn tool_errors_preserve_tapkit_code_and_use_json_rpc_categories() {
+        let missing = tool_error(Error::new(
+            "HANDLE_NOT_FOUND",
+            "Unknown workbook handle \"wb_missing\"",
+        ));
+        assert_eq!(missing.code, rmcp::model::ErrorCode::RESOURCE_NOT_FOUND);
+        assert_eq!(
+            missing
+                .data
+                .as_ref()
+                .and_then(|value| value.get("tapkit_code"))
+                .and_then(Value::as_str),
+            Some("HANDLE_NOT_FOUND")
+        );
+
+        let invalid = tool_error(Error::new(
+            "WORKSHEET_NOT_FOUND",
+            "Worksheet \"Missing\" does not exist in this workbook",
+        ));
+        assert_eq!(invalid.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(invalid.message.contains("WORKSHEET_NOT_FOUND"));
+
+        let internal = tool_error(Error::new("INTERNAL", "Workbook cache lock is poisoned"));
+        assert_eq!(internal.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(
+            internal
+                .data
+                .as_ref()
+                .and_then(|value| value.get("tapkit_code"))
+                .and_then(Value::as_str),
+            Some("INTERNAL")
+        );
     }
 }

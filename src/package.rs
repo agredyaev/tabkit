@@ -1,3 +1,8 @@
+//! TWB/TWBX package admission and source-preserving repack.
+//!
+//! Package handling enforces file/ZIP limits, rejects unsafe archive entries,
+//! detects stale input, and preserves unrelated TWBX entries during edits.
+
 use crate::{Error, Result, require};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -9,6 +14,7 @@ use std::{
 };
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
+/// Resource limits applied while opening and repacking workbook files.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     pub xml_bytes: u64,
@@ -43,6 +49,7 @@ struct Entry {
     compressed_sha256: String,
 }
 
+/// Admitted TWB/TWBX package with stale-base and preservation metadata.
 pub struct Package {
     pub path: PathBuf,
     pub kind: Kind,
@@ -52,6 +59,7 @@ pub struct Package {
 }
 
 impl Package {
+    /// Opens a TWB/TWBX package and returns the embedded TWB bytes.
     pub fn open(path: &Path, limits: &Limits) -> Result<(Self, Vec<u8>)> {
         require(
             std::fs::metadata(path)?.len() <= limits.file_bytes,
@@ -189,6 +197,7 @@ impl Package {
         }
     }
 
+    /// Writes a candidate package while preserving unrelated TWBX entries.
     pub fn write_candidate(&self, output: &Path, twb: &[u8], limits: &Limits) -> Result<Self> {
         require(
             twb.len() as u64 <= limits.xml_bytes,
@@ -329,6 +338,7 @@ impl Package {
     }
 }
 
+/// Computes a bounded SHA-256 hash for a file.
 pub fn hash_file(path: &Path, max_bytes: u64) -> Result<String> {
     let mut file = File::open(path)?;
     let mut hash = Sha256::new();

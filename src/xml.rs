@@ -1,3 +1,9 @@
+//! Source-backed XML index for TWB documents.
+//!
+//! Nodes use preorder IDs and retain byte spans into the original UTF-8 source.
+//! Descendant ranges are contiguous, allowing bounded subtree traversal without
+//! constructing a full mutable DOM.
+
 use crate::{Error, Result, require};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -6,9 +12,11 @@ use xmlparser::{ElementEnd, Token, Tokenizer};
 
 const NONE: u32 = u32::MAX;
 
+/// Stable preorder node identifier within one parsed document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
 
+/// Byte span into the original UTF-8 XML source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
     pub start: u32,
@@ -62,6 +70,7 @@ struct Frame {
     last_child: Option<NodeId>,
 }
 
+/// Immutable source-backed XML index.
 pub struct Document {
     source: String,
     names: Vec<String>,
@@ -71,12 +80,14 @@ pub struct Document {
 }
 
 impl Document {
+    /// Parses UTF-8 XML bytes into the source-backed index.
     pub fn parse(bytes: Vec<u8>) -> Result<Self> {
         let source =
             String::from_utf8(bytes).map_err(|_| Error::new("ENCODING", "TWB must be UTF-8"))?;
         Self::parse_string(source)
     }
 
+    /// Consumes XML text and builds the source-backed index.
     pub fn parse_string(source: String) -> Result<Self> {
         let mut names = Vec::<String>::new();
         let mut name_ids = HashMap::<String, u32>::new();
@@ -288,6 +299,7 @@ impl Document {
         self.children(id).find(|child| self.tag(*child) == tag)
     }
 
+    /// Iterates descendants using the node's contiguous preorder subtree range.
     pub fn descendants(&self, root: NodeId) -> Descendants<'_> {
         let node = self.nodes[root.0 as usize];
         Descendants {

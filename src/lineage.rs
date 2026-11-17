@@ -1,3 +1,9 @@
+//! Workbook lineage graph construction and traversal.
+//!
+//! Lineage is built from the typed workbook index. Unsupported or ambiguous
+//! provenance is reported through explicit gaps instead of inferred silently.
+//! SQL Server local `#temp` tables are scoped to the Tableau connection.
+
 use crate::{
     Error, Result, formula,
     text::{FastHashMap, FastHashSet, ascii_case_hash, contains_case_insensitive},
@@ -17,6 +23,7 @@ use std::{
     ops::ControlFlow,
 };
 
+/// Lineage node category.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -61,6 +68,7 @@ impl std::str::FromStr for Kind {
     }
 }
 
+/// Semantic relationship between two lineage nodes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
@@ -82,6 +90,7 @@ pub enum EdgeKind {
     SheetInDashboard,
 }
 
+/// One named object in the lineage graph.
 #[derive(Clone, Debug, Serialize)]
 pub struct Node {
     pub id: u32,
@@ -96,6 +105,7 @@ pub struct Edge {
     pub kind: EdgeKind,
 }
 
+/// Explicit coverage gap where lineage could not be proven safely.
 #[derive(Clone, Debug, Serialize)]
 pub struct Gap {
     pub code: &'static str,
@@ -123,6 +133,7 @@ enum ExactNode {
     Ambiguous,
 }
 
+/// Indexed lineage graph for one workbook.
 pub struct Lineage {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
@@ -146,12 +157,14 @@ impl Adjacency {
 }
 
 impl Lineage {
+    /// Builds lineage from the workbook typed index.
     pub fn build(book: &Workbook) -> Result<Self> {
         let mut builder = Builder::new(book);
         builder.build()?;
         Ok(builder.finish())
     }
 
+    /// Finds nodes by exact name first, then case-insensitive substring fallback.
     pub fn find(&self, text: &str) -> Vec<&Node> {
         self.find_kind(text, None)
     }
@@ -184,6 +197,7 @@ impl Lineage {
         self.trace_limited(node_id, direction, usize::MAX)
     }
 
+    /// Traverses upstream or downstream lineage with an explicit node bound.
     pub fn trace_limited(
         &self,
         node_id: u32,

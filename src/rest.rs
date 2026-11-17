@@ -1,3 +1,9 @@
+//! Tableau REST 3.29 client used by TapKit.
+//!
+//! The client covers PAT sign-in, workbook search/download, `validateWorkbook`,
+//! multipart publish, job polling, and sign-out. Tableau remains the authority
+//! for XSD and semantic workbook validation.
+
 use crate::{
     Error, REST_API_VERSION, Result, TABLEAU_PRODUCT_TARGET,
     package::{self, Limits, Package},
@@ -18,6 +24,7 @@ use std::{
     time::Duration,
 };
 
+/// Tableau REST connection and PAT configuration.
 #[derive(Clone)]
 pub struct Config {
     pub server: String,
@@ -57,6 +64,7 @@ impl Config {
     }
 }
 
+/// Authenticated Tableau REST 3.29 client.
 pub struct Rest {
     config: Config,
     client: Client,
@@ -89,6 +97,7 @@ pub struct Validation {
 }
 
 impl Rest {
+    /// Signs in with a personal access token read from the configured environment variable.
     pub fn sign_in(config: Config) -> Result<Self> {
         config.validate()?;
         let client = Client::builder()
@@ -126,7 +135,7 @@ impl Rest {
                 }
             }))
             .send()?;
-        let value = read_json(response)?;
+        let value = read_json(response, "Tableau sign-in")?;
         let credentials = value
             .get("credentials")
             .ok_or_else(|| Error::new("REST_SHAPE", "Sign-in response lacks credentials"))?;
@@ -151,6 +160,7 @@ impl Rest {
         })
     }
 
+    /// Searches workbooks by exact or partial name.
     pub fn search_workbooks(&self, query: &str, limit: usize) -> Result<Vec<WorkbookInfo>> {
         let query = query.trim();
         require(
@@ -173,7 +183,9 @@ impl Rest {
                 "fields",
                 "id,name,contentUrl,updatedAt,hasExtracts,project.id,project.name",
             );
-        let exact = workbook_infos(self.send_json(self.request(Method::GET, exact_url)?)?)?;
+        let exact = workbook_infos(
+            self.send_json("Workbook search", self.request(Method::GET, exact_url)?)?,
+        )?;
         if !exact.is_empty() {
             return Ok(exact.into_iter().take(limit).collect());
         }
@@ -190,7 +202,9 @@ impl Rest {
                     "fields",
                     "id,name,contentUrl,updatedAt,hasExtracts,project.id,project.name",
                 );
-            let page_items = workbook_infos(self.send_json(self.request(Method::GET, url)?)?)?;
+            let page_items = workbook_infos(
+                self.send_json("Workbook search", self.request(Method::GET, url)?)?,
+            )?;
             let page_len = page_items.len();
             for item in page_items {
                 if item.name.to_lowercase().contains(&needle) {
@@ -226,12 +240,8 @@ impl Rest {
             if include_extract { "true" } else { "false" },
         );
 
-        let mut response = self.request(Method::GET, url)?.send()?;
-        require(
-            response.status().is_success(),
-            "REST_REJECTED",
-            format!("Tableau returned HTTP {}", response.status().as_u16()),
-        )?;
+        let response = self.request(Method::GET, url)?.send()?;
+        let mut response = require_success_response(response, "Workbook download")?;
 
         let mut temp = tempfile::NamedTempFile::new_in(directory)?;
         let mut hash = Sha256::new();
@@ -321,12 +331,8 @@ impl Rest {
             if include_extract { "true" } else { "false" },
         );
 
-        let mut response = self.request(Method::GET, url)?.send()?;
-        require(
-            response.status().is_success(),
-            "REST_REJECTED",
-            format!("Tableau returned HTTP {}", response.status().as_u16()),
-        )?;
+        let response = self.request(Method::GET, url)?.send()?;
+        let mut response = require_success_response(response, "Workbook download")?;
 
         let parent = output
             .parent()
@@ -385,6 +391,7 @@ impl Rest {
         })
     }
 
+    /// Sends TWB XML to Tableau `validateWorkbook` for XSD and semantic validation.
     pub fn validate_workbook(&self, path: &Path, limits: &Limits) -> Result<Validation> {
         let (_package, twb) = Package::open(path, limits)?;
         let part = multipart::Part::bytes(twb)
@@ -413,9 +420,10 @@ impl Rest {
                 response: body,
             })
         } else {
-            Err(Error::new(
-                "REST_REJECTED",
-                format!("Tableau validation returned HTTP {}", status.as_u16()),
+            Err(tableau_rejection(
+                "Workbook validation",
+                status.as_u16(),
+                &body,
             ))
         }
     }
@@ -445,8 +453,10 @@ impl Rest {
         Package::open(path, limits)?;
         let source_hash = package::hash_file(path, limits.file_bytes)?;
 
-        let upload =
-            self.send_json(self.request(Method::POST, self.site_url(&["fileUploads"])?)?)?;
+        let upload = self.send_json(
+            "Start workbook upload",
+            self.request(Method::POST, self.site_url(&["fileUploads"])?)?,
+        )?;
         let session = upload
             .pointer("/fileUpload/uploadSessionId")
             .and_then(Value::as_str)
@@ -484,6 +494,7 @@ impl Rest {
                 .query_pairs_mut()
                 .append_pair("sequenceID", &sequence_id.to_string());
             self.send_json(
+                "Upload workbook block",
                 self.request(Method::PUT, append_url)?
                     .header(CONTENT_TYPE, content_type)
                     .body(body),
@@ -514,16 +525,22 @@ impl Rest {
             .append_pair("asJob", "true");
 
         self.send_json(
+            "Commit workbook publish",
             self.request(Method::POST, url)?
                 .header(CONTENT_TYPE, content_type)
                 .body(body),
         )
     }
 
+    /// Returns the current Tableau background-job response.
     pub fn job(&self, job_id: &str) -> Result<Value> {
-        self.send_json(self.request(Method::GET, self.site_url(&["jobs", job_id])?)?)
+        self.send_json(
+            "Read Tableau background job",
+            self.request(Method::GET, self.site_url(&["jobs", job_id])?)?,
+        )
     }
 
+    /// Invalidates the current Tableau session token.
     pub fn sign_out(self) -> Result<()> {
         let url = api_url(&self.config, None, &["auth", "signout"])?;
         let token = HeaderValue::from_str(&self.token)
@@ -533,11 +550,7 @@ impl Rest {
             .post(url)
             .header("X-Tableau-Auth", token)
             .send()?;
-        require(
-            response.status().is_success(),
-            "REST_REJECTED",
-            format!("Sign-out returned HTTP {}", response.status().as_u16()),
-        )
+        require_success_response(response, "Tableau sign-out").map(|_| ())
     }
 
     fn site_url(&self, parts: &[&str]) -> Result<Url> {
@@ -555,8 +568,8 @@ impl Rest {
             .header(ACCEPT, "application/json"))
     }
 
-    fn send_json(&self, request: RequestBuilder) -> Result<Value> {
-        read_json(request.send()?)
+    fn send_json(&self, action: &str, request: RequestBuilder) -> Result<Value> {
+        read_json(request.send()?, action)
     }
 }
 
@@ -636,15 +649,76 @@ fn api_url(config: &Config, site_id: Option<&str>, parts: &[&str]) -> Result<Url
     Ok(url)
 }
 
-fn read_json(mut response: Response) -> Result<Value> {
+fn require_success_response(mut response: Response, action: &str) -> Result<Response> {
     let status = response.status();
-    let value = read_json_body(&mut response)?;
-    require(
-        status.is_success(),
-        "REST_REJECTED",
-        format!("Tableau returned HTTP {}", status.as_u16()),
-    )?;
-    Ok(value)
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    let body = read_json_body(&mut response).unwrap_or_else(|_| json!({}));
+    Err(tableau_rejection(action, status.as_u16(), &body))
+}
+
+fn tableau_rejection(action: &str, status: u16, body: &Value) -> Error {
+    let code = body
+        .pointer("/error/code")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(compact_tableau_text);
+    let summary = body
+        .pointer("/error/summary")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(compact_tableau_text);
+    let detail = body
+        .pointer("/error/detail")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(compact_tableau_text);
+
+    let mut message = format!("{action} was rejected by Tableau (HTTP {status}");
+    if let Some(code) = &code {
+        message.push_str(", code ");
+        message.push_str(code);
+    }
+    message.push(')');
+
+    if let Some(summary) = &summary {
+        message.push_str(": ");
+        message.push_str(summary);
+    }
+    if let Some(detail) = &detail
+        && summary.as_deref() != Some(detail.as_str())
+    {
+        message.push_str(": ");
+        message.push_str(detail);
+    }
+
+    Error::new("REST_REJECTED", message)
+}
+
+fn compact_tableau_text(value: &str) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX_BYTES: usize = 512;
+    if compact.len() <= MAX_BYTES {
+        return compact;
+    }
+
+    let mut end = MAX_BYTES;
+    while !compact.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &compact[..end])
+}
+
+fn read_json(mut response: Response, action: &str) -> Result<Value> {
+    let status = response.status();
+    if status.is_success() {
+        return read_json_body(&mut response);
+    }
+
+    let body = read_json_body(&mut response).unwrap_or_else(|_| json!({}));
+    Err(tableau_rejection(action, status.as_u16(), &body))
 }
 
 fn read_json_any_status(mut response: Response) -> Result<Value> {
@@ -725,6 +799,44 @@ mod tests {
         assert_eq!(items[0].project_name.as_deref(), Some("Reporting"));
         assert_eq!(items[0].has_extracts, Some(true));
         Ok(())
+    }
+
+    #[test]
+    fn tableau_rejection_preserves_server_code_summary_and_detail() {
+        let error = tableau_rejection(
+            "Workbook download",
+            404,
+            &json!({
+                "error": {
+                    "code": "404002",
+                    "summary": "Workbook not found",
+                    "detail": "The requested workbook does not exist or is not visible."
+                }
+            }),
+        );
+        assert_eq!(error.code, "REST_REJECTED");
+        assert_eq!(
+            error.message,
+            "Workbook download was rejected by Tableau (HTTP 404, code 404002): Workbook not found: The requested workbook does not exist or is not visible."
+        );
+    }
+
+    #[test]
+    fn tableau_rejection_compacts_multiline_detail() {
+        let error = tableau_rejection(
+            "Workbook publish",
+            403,
+            &json!({
+                "error": {
+                    "summary": "Permission denied",
+                    "detail": "Project access\n  is not available"
+                }
+            }),
+        );
+        assert_eq!(
+            error.message,
+            "Workbook publish was rejected by Tableau (HTTP 403): Permission denied: Project access is not available"
+        );
     }
 
     #[test]

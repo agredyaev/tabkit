@@ -1,3 +1,9 @@
+//! Typed workbook edit operations.
+//!
+//! This module validates supported semantic edits, lowers them to bounded XML
+//! patches, reparses the candidate workbook, and returns a verified candidate.
+//! It does not expose arbitrary raw XML mutation.
+
 use crate::{
     Error, Result, formula,
     patch::{self, Patch},
@@ -16,12 +22,14 @@ use std::{
 
 const CANVAS: u32 = 100_000;
 
+/// Ordered semantic edits applied against one workbook base.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Batch {
     pub edits: Vec<Edit>,
 }
 
+/// Supported semantic edit operations.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Edit {
@@ -29,6 +37,7 @@ pub enum Edit {
     CreateDashboard(DashboardSpec),
 }
 
+/// Parameters for creating a datasource calculation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CalculationSpec {
@@ -42,6 +51,7 @@ pub struct CalculationSpec {
     pub name: Option<String>,
 }
 
+/// Parameters for creating a dashboard from existing worksheets.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DashboardSpec {
@@ -56,6 +66,7 @@ pub struct DashboardSpec {
     pub layout: Layout,
 }
 
+/// Recursive dashboard layout tree.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Layout {
@@ -186,6 +197,7 @@ pub struct LineStyle {
     pub width: Option<u32>,
 }
 
+/// Deterministic summary of an accepted edit batch.
 #[derive(Debug, Serialize)]
 pub struct Receipt {
     pub sha256: String,
@@ -193,12 +205,14 @@ pub struct Receipt {
     pub dashboards: Vec<String>,
 }
 
+/// Reparsing-verified workbook candidate produced by [`apply`].
 pub struct Candidate {
     pub workbook: Workbook,
     pub receipt: Receipt,
 }
 
 impl Candidate {
+    /// Returns the candidate TWB XML text.
     pub fn text(&self) -> &str {
         self.workbook.xml.source()
     }
@@ -227,6 +241,7 @@ struct ZoneRenderer<'a> {
     next_id: u32,
 }
 
+/// Applies a typed edit batch and reparses the resulting workbook before returning it.
 pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate> {
     require(
         !batch.edits.is_empty(),
@@ -399,9 +414,15 @@ fn validate_calculation_spec(
         "Authored calculations require explicit datatype, role, and field type",
     )?;
 
-    let datasource_id = book
-        .datasource_id(&spec.datasource)
-        .ok_or_else(|| Error::new("DATASOURCE_NOT_FOUND", &spec.datasource))?;
+    let datasource_id = book.datasource_id(&spec.datasource).ok_or_else(|| {
+        Error::new(
+            "DATASOURCE_NOT_FOUND",
+            format!(
+                "Datasource {:?} does not exist in this workbook",
+                spec.datasource
+            ),
+        )
+    })?;
     let datasource = book
         .datasource(datasource_id)
         .ok_or_else(|| Error::new("INTERNAL", "Datasource id is invalid"))?;
@@ -870,9 +891,12 @@ fn resolve_filter_binding<'a>(
         values,
         title,
     } = request;
-    let worksheet_id = book
-        .worksheet_id(source_sheet)
-        .ok_or_else(|| Error::new("WORKSHEET_NOT_FOUND", source_sheet))?;
+    let worksheet_id = book.worksheet_id(source_sheet).ok_or_else(|| {
+        Error::new(
+            "WORKSHEET_NOT_FOUND",
+            format!("Worksheet {source_sheet:?} does not exist in this workbook"),
+        )
+    })?;
 
     let index = match indexes.entry(worksheet_id) {
         std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
@@ -1054,9 +1078,15 @@ fn validate_view_style(book: &Workbook, style: &ViewStyleSpec) -> Result<()> {
 }
 
 fn view_style_patches(book: &Workbook, style: &ViewStyleSpec) -> Result<Vec<Patch>> {
-    let worksheet_id = book
-        .worksheet_id(&style.sheet)
-        .ok_or_else(|| Error::new("WORKSHEET_NOT_FOUND", &style.sheet))?;
+    let worksheet_id = book.worksheet_id(&style.sheet).ok_or_else(|| {
+        Error::new(
+            "WORKSHEET_NOT_FOUND",
+            format!(
+                "Worksheet {:?} does not exist in this workbook",
+                style.sheet
+            ),
+        )
+    })?;
     let worksheet = &book.worksheets[worksheet_id.0 as usize];
     let mut patches = Vec::new();
 

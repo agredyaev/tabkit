@@ -1,20 +1,25 @@
 //! Tableau formula lexical/reference extraction.
-//! This is intentionally not a Tableau expression evaluator.
+//!
+//! This module extracts field references and performs bounded lexical checks.
+//! It is intentionally not a Tableau expression evaluator.
 use crate::{Error, Result, require};
 use serde::Serialize;
 
+/// Field reference extracted from a Tableau formula.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct Reference {
     pub datasource: Option<String>,
     pub field: String,
 }
 
+/// Lexical analysis result for a Tableau formula.
 #[derive(Debug)]
 pub struct Analysis {
     pub references: Vec<Reference>,
     pub warnings: Vec<String>,
 }
 
+/// Extracts field references and lexical warnings from a bounded formula string.
 pub fn analyze(source: &str) -> Result<Analysis> {
     require(
         !source.trim().is_empty() && source.len() <= 128 * 1024,
@@ -170,6 +175,7 @@ pub fn analyze(source: &str) -> Result<Analysis> {
     })
 }
 
+/// Parses a qualified Tableau reference into datasource and field names.
 pub fn qualified(source: &str) -> Result<(String, String)> {
     let source = source.trim();
     require(

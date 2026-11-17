@@ -218,7 +218,11 @@ See [SECURITY.md](SECURITY.md).
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md)
-- [DASHBOARD.md](DASHBOARD.md)
-- [PERFORMANCE.md](PERFORMANCE.md)
+Technical documentation is under [`docs/`](docs/README.md):
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Dashboard authoring](docs/DASHBOARD.md)
+- [Performance](docs/PERFORMANCE.md)
+- [Rust API map](docs/API.md)
+- [Error contract](docs/ERRORS.md)
 - [CHANGELOG.md](CHANGELOG.md)
