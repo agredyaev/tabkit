@@ -17,8 +17,6 @@ jobs:
         include:
           - os: ubuntu-24.04
             artifact: tabkit-linux-x64
-          - os: macos-15
-            artifact: tabkit-macos
           - os: windows-2025
             artifact: tabkit-windows-x64
     runs-on: ${{ matrix.os }}
