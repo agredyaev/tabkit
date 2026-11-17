@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 axum = "0.8"
+base64 = "0.22.1"
 clap = { version = "4.5", features = ["derive", "env"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 rmcp = { version = "3.11", features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"] }

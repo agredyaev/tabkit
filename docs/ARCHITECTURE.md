@@ -38,7 +38,8 @@ traversal, authoring, and package mutation are local.
 - `formula.rs` — lexical extraction/validation of Tableau field references.
 - `lineage.rs` — compact typed nodes/edges and bounded traversal.
 - `patch.rs` — deterministic non-overlapping byte patches and preservation checks.
-- `edit.rs` — calculation, parameter, bounded worksheet, action, and dashboard semantic specs and lowering.
+- `edit.rs` — calculation, parameter, bounded worksheet, action, native-dashboard, and web-dashboard semantic specs and lowering.
+- `extension/` — trusted Dashboard Extension host, vendored Tableau Extensions API, sandbox runtime, and narrow Tableau bridge.
 - `rest.rs` — Tableau REST 3.29 auth/search/download/validate/publish/job boundary.
 - `mcp.rs` — nine thin MCP tools over the core runtime.
 - `mcp_main.rs` — stdio/Streamable HTTP launcher.
@@ -128,6 +129,7 @@ create_parameter
 create_worksheet
 create_filter_action
 create_parameter_action
+create_web_dashboard
 create_dashboard
 ```
 
@@ -139,10 +141,12 @@ Parameter authoring is limited to string/integer/real/boolean values with any/li
 
 Filter actions use Tableau's legacy `tsc:tsl-filter` action contract to filter the other compatible worksheets on a dashboard. Parameter actions use `edit-parameter-action` and require source/target datatype compatibility. TapKit does not infer action field mappings or synthesize persisted `Apply to Worksheets` state.
 
-Dashboard design is expressed through nested rows/columns, fixed or weighted sizing, gaps,
+Native dashboard design is expressed through nested rows/columns, fixed or weighted sizing, gaps,
 container/canvas padding, text, worksheet zones, filter cards, and supported zone styles. The
 compiler owns Tableau IDs, normalized geometry, dashboard datasource dependencies, and
 window/viewpoint registration.
+
+`create_web_dashboard` is a separate presentation path. It emits one full-canvas Dashboard Extension object and persists a bounded HTML/CSS/JavaScript bundle in extension instance settings. Generated code runs in a sandboxed iframe and talks to Tableau only through the trusted host bridge. Direct datasource reads use Tableau full-data APIs, so the extension manifest declares that permission explicitly.
 
 Worksheet presentation may be attached to the dashboard spec as a bounded set of style patches:
 font family/size/color, axis/grid/zero-line styling, mark size/line width, and label visibility.

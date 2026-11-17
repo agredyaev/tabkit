@@ -16,6 +16,7 @@ use crate::{
     workbook::{DataType, DatasourceId, FieldType, Role, Workbook, WorksheetId},
     xml::{NodeId, Span},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -26,6 +27,9 @@ use std::{
 };
 
 const CANVAS: u32 = 100_000;
+const WEB_EXTENSION_ID: &str = "io.tapkit.web-dashboard";
+const WEB_EXTENSION_VERSION: &str = "0.1.0";
+const WEB_DASHBOARD_MAX_INLINE_BYTES: usize = 1024 * 1024;
 
 /// Atomic semantic edit plan evaluated against one workbook base.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -43,6 +47,7 @@ pub enum Edit {
     CreateWorksheet(WorksheetSpec),
     CreateFilterAction(FilterActionSpec),
     CreateParameterAction(ParameterActionSpec),
+    CreateWebDashboard(WebDashboardSpec),
     CreateDashboard(DashboardSpec),
 }
 
@@ -174,6 +179,23 @@ pub struct ParameterActionSpec {
     pub target_parameter: String,
     #[serde(default)]
     pub run_on: ActionTrigger,
+}
+
+/// Full-screen Dashboard Extension whose HTML, CSS, and JavaScript are persisted
+/// as extension instance settings in the workbook.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WebDashboardSpec {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default = "default_web_extension_url")]
+    pub extension_url: String,
+    pub html: String,
+    #[serde(default)]
+    pub css: String,
+    #[serde(default)]
+    pub javascript: String,
 }
 
 /// Fixed-size dashboard specification built only from already indexed worksheets.
@@ -437,6 +459,13 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
                     format!("Action {:?} is created more than once", spec.caption),
                 )?;
             }
+            Edit::CreateWebDashboard(spec) => {
+                require(
+                    dashboard_names.insert(spec.name.clone()),
+                    "DUPLICATE_EDIT",
+                    format!("Dashboard {:?} is created more than once", spec.name),
+                )?;
+            }
             Edit::CreateDashboard(spec) => {
                 require(
                     dashboard_names.insert(spec.name.clone()),
@@ -471,6 +500,7 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
     let mut worksheets = Vec::new();
     let mut actions = Vec::new();
     let mut dashboards = Vec::new();
+    let mut web_dashboards = Vec::new();
 
     let parameter_specs = batch
         .edits
@@ -484,6 +514,24 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
         let (patch, created) = parameter_batch_patch(book, &parameter_specs)?;
         patches.push(patch);
         parameters = created;
+    }
+
+    let web_dashboard_specs = batch
+        .edits
+        .iter()
+        .filter_map(|edit| match edit {
+            Edit::CreateWebDashboard(spec) => Some(spec),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if let Some(first) = web_dashboard_specs.first() {
+        for spec in web_dashboard_specs.iter().skip(1) {
+            require(
+                spec.extension_url == first.extension_url,
+                "WEB_DASHBOARD",
+                "All web dashboards in one edit batch must use the same extension_url",
+            )?;
+        }
     }
 
     let mut worksheet_xml_batch = String::new();
@@ -521,6 +569,19 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
                     .insert(parameter_name);
                 actions.push(spec.caption.clone());
             }
+            Edit::CreateWebDashboard(spec) => {
+                let parts = web_dashboard_parts(
+                    book,
+                    spec,
+                    dashboard_zone_cursor.as_mut().ok_or_else(|| {
+                        Error::new("INTERNAL", "Dashboard zone cursor is missing")
+                    })?,
+                )?;
+                dashboard_xml.push_str(&parts.dashboard);
+                window_xml.push_str(&parts.window);
+                dashboards.push(spec.name.clone());
+                web_dashboards.push(spec.name.clone());
+            }
             Edit::CreateDashboard(spec) => {
                 let parts = dashboard_parts(
                     book,
@@ -550,6 +611,9 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
         book,
         &parameter_dashboard_requests,
     )?);
+    if !web_dashboard_specs.is_empty() {
+        patches.push(web_extension_reference_patch(book, &web_dashboard_specs)?);
+    }
 
     if !dashboards.is_empty() {
         patches.push(dashboard_batch_patch(book, dashboard_xml)?);
@@ -607,6 +671,13 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
             reopened.dashboard_id(name).is_some(),
             "POSTCONDITION",
             format!("Generated dashboard {name:?} is not indexed after edit"),
+        )?;
+    }
+    for name in &web_dashboards {
+        require(
+            web_dashboard_postcondition(&reopened, name)?,
+            "POSTCONDITION",
+            format!("Generated web dashboard {name:?} is missing its TapKit extension object"),
         )?;
     }
 
@@ -1723,6 +1794,264 @@ struct DashboardParts {
     dashboard: String,
     window: String,
     other_patches: Vec<Patch>,
+}
+
+fn web_dashboard_parts(
+    book: &Workbook,
+    spec: &WebDashboardSpec,
+    next_id: &mut u32,
+) -> Result<DashboardParts> {
+    require(
+        !spec.name.trim().is_empty(),
+        "WEB_DASHBOARD",
+        "Dashboard name cannot be empty",
+    )?;
+    require(
+        book.dashboard_id(&spec.name).is_none(),
+        "DASHBOARD_EXISTS",
+        format!("Dashboard {:?} already exists", spec.name),
+    )?;
+    require(
+        spec.width > 0 && spec.height > 0,
+        "WEB_DASHBOARD",
+        "Dashboard width and height must be positive",
+    )?;
+    require(
+        !spec.html.is_empty() || !spec.javascript.is_empty(),
+        "WEB_DASHBOARD",
+        "Web dashboard requires HTML or JavaScript",
+    )?;
+    let inline_bytes = spec
+        .html
+        .len()
+        .checked_add(spec.css.len())
+        .and_then(|size| size.checked_add(spec.javascript.len()))
+        .ok_or_else(|| Error::new("WEB_DASHBOARD", "Inline dashboard size overflow"))?;
+    require(
+        inline_bytes <= WEB_DASHBOARD_MAX_INLINE_BYTES,
+        "WEB_DASHBOARD",
+        format!(
+            "Inline HTML, CSS, and JavaScript must be <= {WEB_DASHBOARD_MAX_INLINE_BYTES} bytes"
+        ),
+    )?;
+    validate_web_extension_url(&spec.extension_url)?;
+
+    let bundle = serde_json::to_vec(&serde_json::json!({
+        "html": spec.html,
+        "css": spec.css,
+        "javascript": spec.javascript,
+    }))?;
+    let bundle_b64 = BASE64.encode(bundle);
+
+    let root_id = take_id(next_id)?;
+    let extension_id = take_id(next_id)?;
+    let dashboard_uuid =
+        deterministic_uuid(&book.xml.sha256, &format!("web-dashboard:{}", spec.name));
+    let window_uuid = deterministic_uuid(&book.xml.sha256, &format!("web-window:{}", spec.name));
+    let instance_uuid =
+        deterministic_uuid(&book.xml.sha256, &format!("web-extension:{}", spec.name));
+    let instance_id = instance_uuid.trim_matches(['{', '}']).replace('-', "");
+
+    let param = format!(
+        "[{WEB_EXTENSION_ID}].[{WEB_EXTENSION_VERSION}].[{}]",
+        spec.extension_url
+    );
+    let dashboard = format!(
+        "\n    <dashboard enable-sort-zone-taborder=\"true\" name=\"{}\">\n      <style/>\n      <size maxheight=\"{}\" maxwidth=\"{}\" minheight=\"{}\" minwidth=\"{}\" sizing-mode=\"fixed\"/>\n      <zones>\n        <zone h=\"{CANVAS}\" id=\"{root_id}\" type-v2=\"layout-basic\" w=\"{CANVAS}\" x=\"0\" y=\"0\">\n          <zone forceUpdate=\"true\" h=\"{CANVAS}\" id=\"{extension_id}\" param=\"{}\" type=\"dashboard-object\" w=\"{CANVAS}\" x=\"0\" y=\"0\">\n            <add-in add-in-id=\"{WEB_EXTENSION_ID}\" extension-url=\"{}\" extension-version=\"{WEB_EXTENSION_VERSION}\" instance-id=\"{}\">\n              <instance-settings><setting key=\"tapkit.bundle_b64\" value=\"{}\"/></instance-settings>\n              <type-settings><dashboard/></type-settings>\n            </add-in>\n          </zone>\n        </zone>\n      </zones>\n      <simple-id uuid=\"{}\"/>\n    </dashboard>",
+        escape_attr(&spec.name),
+        spec.height,
+        spec.width,
+        spec.height,
+        spec.width,
+        escape_attr(&param),
+        escape_attr(&spec.extension_url),
+        escape_attr(&instance_id),
+        escape_attr(&bundle_b64),
+        dashboard_uuid,
+    );
+    let window = format!(
+        "\n    <window class=\"dashboard\" name=\"{}\"><active id=\"-1\"/><simple-id uuid=\"{}\"/></window>",
+        escape_attr(&spec.name),
+        window_uuid,
+    );
+
+    Ok(DashboardParts {
+        dashboard,
+        window,
+        other_patches: Vec::new(),
+    })
+}
+
+fn validate_web_extension_url(url: &str) -> Result<()> {
+    require(
+        !url.is_empty() && url.len() <= 2048,
+        "WEB_DASHBOARD",
+        "extension_url must be 1..2048 bytes",
+    )?;
+    let lower = url.to_ascii_lowercase();
+    let secure = lower
+        .strip_prefix("https://")
+        .is_some_and(|rest| !rest.is_empty());
+    let localhost = lower
+        .strip_prefix("http://")
+        .and_then(|rest| rest.split(['/', '?', '#']).next())
+        .is_some_and(|authority| {
+            authority == "localhost"
+                || authority.starts_with("localhost:")
+                || authority == "127.0.0.1"
+                || authority.starts_with("127.0.0.1:")
+                || authority == "[::1]"
+                || authority.starts_with("[::1]:")
+        });
+    require(
+        secure || localhost,
+        "WEB_DASHBOARD",
+        "extension_url must use HTTPS; HTTP is accepted only for localhost",
+    )
+}
+
+fn web_extension_reference_patch(book: &Workbook, specs: &[&WebDashboardSpec]) -> Result<Patch> {
+    let first = specs
+        .first()
+        .ok_or_else(|| Error::new("INTERNAL", "Web dashboard reference batch is empty"))?;
+    validate_web_extension_url(&first.extension_url)?;
+
+    let views = specs
+        .iter()
+        .map(|spec| {
+            format!(
+                "<referenced-view instances=\"1\" viewId=\"{}\"/>",
+                escape_attr(&spec.name)
+            )
+        })
+        .collect::<String>();
+
+    if let Some(existing) = tapkit_referenced_extension(book)? {
+        let existing_url = book
+            .xml
+            .descendants(existing)
+            .find(|node| book.xml.tag(*node) == "url")
+            .and_then(|node| book.xml.text(node))
+            .unwrap_or("");
+        require(
+            existing_url == first.extension_url,
+            "WEB_DASHBOARD",
+            format!(
+                "Workbook already references {WEB_EXTENSION_ID} at {existing_url:?}; requested {:?}",
+                first.extension_url
+            ),
+        )?;
+
+        if let Some(referenced_views) = book.xml.direct_child(existing, "referenced-views") {
+            let at = book.xml.closing_tag_start(referenced_views)?;
+            return Ok(Patch {
+                span: Span::empty(at)?,
+                expected: String::new(),
+                replacement: views,
+                reason: "register TapKit web dashboard views".into(),
+            });
+        }
+        let at = book.xml.closing_tag_start(existing)?;
+        return Ok(Patch {
+            span: Span::empty(at)?,
+            expected: String::new(),
+            replacement: format!("<referenced-views>{views}</referenced-views>"),
+            reason: "register TapKit web dashboard views".into(),
+        });
+    }
+
+    let referenced_extension = format!(
+        "\n    <referenced-extension>\n      <manifest manifest-version=\"0.1\">\n        <dashboard-extension extension-version=\"{WEB_EXTENSION_VERSION}\" id=\"{WEB_EXTENSION_ID}\">\n          <default-locale>en_US</default-locale>\n          <name resource-id=\"name\"/>\n          <description>TapKit sandboxed HTML and JavaScript dashboard host.</description>\n          <author email=\"noreply@tapkit.local\" name=\"TapKit\" organization=\"TapKit\" website=\"https://github.com/agredyaev/tabkit\"/>\n          <min-api-version>1.10</min-api-version>\n          <source-location><url>{}</url></source-location>\n          <icon>iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=</icon>\n          <permissions><permission>full data</permission></permissions>\n        </dashboard-extension>\n        <resources><resource id=\"name\"><text locale=\"en_US\">TapKit Web Dashboard</text></resource></resources>\n      </manifest>\n      <referenced-views>{views}</referenced-views>\n    </referenced-extension>",
+        escape_text(&first.extension_url),
+    );
+
+    if let Some(container) = book.root_child("referenced-extensions") {
+        return Ok(Patch {
+            span: Span::empty(book.xml.closing_tag_start(container)?)?,
+            expected: String::new(),
+            replacement: referenced_extension,
+            reason: "register TapKit web dashboard extension".into(),
+        });
+    }
+
+    Ok(Patch {
+        span: Span::empty(referenced_extensions_insert_at(book)?)?,
+        expected: String::new(),
+        replacement: format!(
+            "\n  <referenced-extensions>{referenced_extension}\n  </referenced-extensions>"
+        ),
+        reason: "register TapKit web dashboard extension".into(),
+    })
+}
+
+fn tapkit_referenced_extension(book: &Workbook) -> Result<Option<NodeId>> {
+    let Some(container) = book.root_child("referenced-extensions") else {
+        return Ok(None);
+    };
+    for referenced in book
+        .xml
+        .children(container)
+        .filter(|node| book.xml.tag(*node) == "referenced-extension")
+    {
+        for node in book.xml.descendants(referenced) {
+            if book.xml.tag(node) == "dashboard-extension"
+                && book
+                    .xml
+                    .attr(node, "id")?
+                    .is_some_and(|id| id.as_ref() == WEB_EXTENSION_ID)
+            {
+                return Ok(Some(referenced));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn referenced_extensions_insert_at(book: &Workbook) -> Result<usize> {
+    let root = book.xml.root();
+    for child in book.xml.children(root) {
+        if matches!(
+            book.xml.tag(child),
+            "explain-data"
+                | "data-orientation"
+                | "tab-agent-config"
+                | "accelerator-details"
+                | "workbook-optimizer"
+        ) {
+            return Ok(book.xml.span(child).start as usize);
+        }
+    }
+    book.xml.closing_tag_start(root)
+}
+
+fn web_dashboard_postcondition(book: &Workbook, name: &str) -> Result<bool> {
+    let Some(dashboard_id) = book.dashboard_id(name) else {
+        return Ok(false);
+    };
+    let dashboard = book
+        .dashboards
+        .get(dashboard_id.0 as usize)
+        .ok_or_else(|| Error::new("INTERNAL", "Dashboard id is invalid"))?;
+    let mut add_in = false;
+    let mut bundle = false;
+    for node in book.xml.descendants(dashboard.node) {
+        match book.xml.tag(node) {
+            "add-in" => {
+                add_in |= book
+                    .xml
+                    .attr(node, "add-in-id")?
+                    .is_some_and(|id| id.as_ref() == WEB_EXTENSION_ID);
+            }
+            "setting" => {
+                bundle |= book
+                    .xml
+                    .attr(node, "key")?
+                    .is_some_and(|key| key.as_ref() == "tapkit.bundle_b64");
+            }
+            _ => {}
+        }
+    }
+    Ok(add_in && bundle && tapkit_referenced_extension(book)?.is_some())
 }
 
 fn dashboard_parts<'a>(
@@ -3008,6 +3337,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_web_extension_url() -> String {
+    "http://localhost:8765/host.html".into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3928,6 +4261,112 @@ mod tests {
                 .text()
                 .contains(r#"<window class="dashboard" name="Styled">"#)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn creates_fullscreen_web_dashboard_with_byte_preserving_bundle() -> Result<()> {
+        let book = dashboard_workbook()?;
+        let html = "<main id=\"app\">Revenue</main>\n<section>Δ</section>";
+        let css = "#app { display: grid; gap: 12px; }\nsection { font-weight: 600; }";
+        let javascript =
+            "const sheets = await tapkit.listWorksheets();\nwindow.dashboardSheets = sheets;";
+
+        let candidate = apply(
+            &book,
+            &Batch {
+                edits: vec![Edit::CreateWebDashboard(WebDashboardSpec {
+                    name: "Web Overview".into(),
+                    width: 1440,
+                    height: 900,
+                    extension_url: default_web_extension_url(),
+                    html: html.into(),
+                    css: css.into(),
+                    javascript: javascript.into(),
+                })],
+            },
+            8 << 20,
+        )?;
+
+        assert!(candidate.workbook.dashboard_id("Web Overview").is_some());
+        assert!(candidate.text().contains(r#"type="dashboard-object""#));
+        assert!(
+            candidate
+                .text()
+                .contains(r#"add-in-id="io.tapkit.web-dashboard""#)
+        );
+        assert!(
+            candidate
+                .text()
+                .contains("<permissions><permission>full data</permission></permissions>")
+        );
+        assert_eq!(
+            candidate
+                .text()
+                .matches(r#"type="dashboard-object""#)
+                .count(),
+            1
+        );
+
+        let dashboard_id = candidate
+            .workbook
+            .dashboard_id("Web Overview")
+            .ok_or_else(|| Error::new("TEST", "web dashboard is not indexed"))?;
+        let dashboard = candidate
+            .workbook
+            .dashboards
+            .get(dashboard_id.0 as usize)
+            .ok_or_else(|| Error::new("TEST", "web dashboard id is invalid"))?;
+        let setting = candidate
+            .workbook
+            .xml
+            .descendants(dashboard.node)
+            .find(|node| {
+                candidate.workbook.xml.tag(*node) == "setting"
+                    && candidate.workbook.xml.attr_raw(*node, "key") == Some("tapkit.bundle_b64")
+            })
+            .ok_or_else(|| Error::new("TEST", "web dashboard bundle setting is missing"))?;
+        let encoded = candidate
+            .workbook
+            .xml
+            .attr(setting, "value")?
+            .ok_or_else(|| Error::new("TEST", "web dashboard bundle value is missing"))?;
+        let decoded = BASE64
+            .decode(encoded.as_bytes())
+            .map_err(|_| Error::new("TEST", "web dashboard bundle is not base64"))?;
+        let bundle: serde_json::Value = serde_json::from_slice(&decoded)?;
+        assert_eq!(bundle["html"], html);
+        assert_eq!(bundle["css"], css);
+        assert_eq!(bundle["javascript"], javascript);
+        assert!(web_dashboard_postcondition(
+            &candidate.workbook,
+            "Web Overview"
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_non_https_remote_web_extension_url() -> Result<()> {
+        let book = dashboard_workbook()?;
+        let error = match apply(
+            &book,
+            &Batch {
+                edits: vec![Edit::CreateWebDashboard(WebDashboardSpec {
+                    name: "Unsafe".into(),
+                    width: 800,
+                    height: 600,
+                    extension_url: "http://example.com/host.html".into(),
+                    html: "<main/>".into(),
+                    css: String::new(),
+                    javascript: String::new(),
+                })],
+            },
+            8 << 20,
+        ) {
+            Ok(_) => return Err(Error::new("TEST", "insecure extension URL was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "WEB_DASHBOARD");
         Ok(())
     }
 }

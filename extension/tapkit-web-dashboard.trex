@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest manifest-version="0.1" xmlns="http://www.tableau.com/xml/extension_manifest">
+  <dashboard-extension id="io.tapkit.web-dashboard" extension-version="0.1.0">
+    <default-locale>en_US</default-locale>
+    <name resource-id="name"/>
+    <description>TapKit sandboxed HTML and JavaScript dashboard host.</description>
+    <author name="TapKit" email="noreply@tapkit.local" organization="TapKit" website="https://github.com/agredyaev/tabkit"/>
+    <min-api-version>1.10</min-api-version>
+    <source-location>
+      <url>http://localhost:8765/host.html</url>
+    </source-location>
+    <icon>iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=</icon>
+    <permissions>
+      <permission>full data</permission>
+    </permissions>
+  </dashboard-extension>
+  <resources>
+    <resource id="name">
+      <text locale="en_US">TapKit Web Dashboard</text>
+    </resource>
+  </resources>
+</manifest>

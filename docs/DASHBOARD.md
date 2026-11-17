@@ -1,6 +1,8 @@
-# Dashboard authoring
+# Native dashboard authoring
 
-TapKit dashboard authoring is a semantic layout compiler. The caller specifies layout, sizing,
+This document covers `create_dashboard`. For single-extension HTML/CSS/JavaScript dashboards, see [Web dashboard extension](WEB_DASHBOARD.md).
+
+TapKit native dashboard authoring is a semantic layout compiler. The caller specifies layout, sizing,
 styles, worksheet references, filter cards, and selected worksheet formatting. TapKit owns Tableau
 zone IDs, normalized coordinates, dashboard dependencies, dashboard windows/viewpoints, and XML
 ordering.

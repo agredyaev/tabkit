@@ -10,6 +10,7 @@ create_parameter
 create_worksheet
 create_filter_action
 create_parameter_action
+create_web_dashboard
 create_dashboard
 ```
 
@@ -132,6 +133,33 @@ Example:
   "run_on": "select"
 }
 ```
+
+## Web dashboards
+
+`create_web_dashboard` creates a fixed-size Tableau dashboard whose presentation surface is one full-canvas TapKit Dashboard Extension.
+
+HTML, CSS, and JavaScript are stored as a base64-encoded UTF-8 JSON bundle in the extension instance setting `tapkit.bundle_b64`. The unencoded payload is limited to 1 MiB.
+
+The default development host is `http://localhost:8765/host.html`. Remote `extension_url` values must use HTTPS.
+
+Generated code runs in a sandboxed iframe and receives the narrow `window.tapkit` bridge instead of direct access to `tableau.extensions`. Data-source reads use Tableau full-data APIs; worksheet summary/filter methods remain available for hybrid dashboards.
+
+Example:
+
+```json
+{
+  "op": "create_web_dashboard",
+  "name": "Executive Overview",
+  "width": 1440,
+  "height": 900,
+  "extension_url": "https://bi.example.com/tapkit/host.html",
+  "html": "<main id=\"app\"></main>",
+  "css": "#app { display: grid; }",
+  "javascript": "const sources = await tapkit.listDataSources();"
+}
+```
+
+See [Web dashboard extension](WEB_DASHBOARD.md) for the runtime, bridge, deployment, and security contract.
 
 ## Composition
 

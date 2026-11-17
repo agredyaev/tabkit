@@ -990,6 +990,8 @@ mod tests {
             "create_worksheet",
             "create_filter_action",
             "create_parameter_action",
+            "create_web_dashboard",
+            "extension_url",
             "text_table",
         ] {
             assert!(

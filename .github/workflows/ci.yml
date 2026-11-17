@@ -30,6 +30,12 @@ jobs:
       - run: cargo doc --locked --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      - name: Validate web extension
+        shell: bash
+        run: |
+          node --check extension/host.js
+          node --check extension/vendor/tableau.extensions.1.latest.min.js
+          python3 -c "import xml.etree.ElementTree as ET; ET.parse('extension/tapkit-web-dashboard.trex')"
 
   test:
     name: Test (${{ matrix.os }})
@@ -60,6 +66,7 @@ jobs:
           Copy-Item target/release/tabkit-mcp.exe dist/
           Copy-Item README.md dist/
           Copy-Item LICENSE dist/
+          Copy-Item extension dist/extension -Recurse
           Compress-Archive -Path dist/* -DestinationPath tabkit-windows-x64.zip
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

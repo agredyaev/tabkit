@@ -11,7 +11,7 @@ TapKit keeps the public Rust surface small. The code is organized by responsibil
 | `package` | TWB/TWBX admission, bounded ZIP handling, stale-base checks, source-preserving repack | `Package::open`, `Package::write_candidate`, `Limits` |
 | `formula` | Tableau formula reference extraction; not an expression evaluator | `analyze`, `qualified` |
 | `lineage` | Build and query the semantic dependency graph | `Lineage::build`, `find_kind`, `trace_limited` |
-| `edit` | Typed calculation, parameter, worksheet, action, and dashboard authoring lowered into source-preserving XML patches | `Batch`, `Edit`, `apply`, `Candidate` |
+| `edit` | Typed calculation, parameter, worksheet, action, native-dashboard, and web-dashboard authoring lowered into source-preserving XML patches | `Batch`, `Edit`, `apply`, `Candidate` |
 | `patch` | Admit, apply, and verify non-overlapping byte patches | `Patch`, `apply` |
 | `rest` | Tableau REST 3.29 authentication, search, download, validation, publish, and job polling | `Config`, `Rest` |
 | `mcp` | MCP server state and tool handlers built on `rmcp` | `TapKitMcp` |

@@ -11,6 +11,7 @@
 - Added bounded bar, line, KPI, and text-table worksheet authoring from existing datasource fields.
 - Added dashboard filter actions and parameter actions.
 - Added dashboard authoring from existing worksheets, filter cards, layout, and presentation styles.
+- Added `create_web_dashboard` and the bundled TapKit Dashboard Extension host for sandboxed HTML/CSS/JavaScript dashboards.
 - Added source-preserving TWB/TWBX edits and package preservation checks.
 - Added Tableau REST 3.29 search, download, `validateWorkbook`, publish, and job polling.
 - Added Windows/Linux CI, cargo-deny, RustSec audit, Dependabot, and Windows release packaging.

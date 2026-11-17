@@ -25,6 +25,7 @@ TapKit supports:
 - calculation and parameter creation;
 - basic bar, line, KPI, and text-table worksheet creation from existing datasource fields;
 - dashboard creation from existing worksheets;
+- full-screen HTML/CSS/JavaScript web dashboards through the bundled Dashboard Extension host;
 - dashboard filter actions and parameter actions;
 - dashboard layout, filter cards, and bounded presentation styling;
 - Tableau workbook search and download;
@@ -71,7 +72,7 @@ target\release\tabkit.exe
 target\release\tabkit-mcp.exe
 ```
 
-CI also publishes a `tabkit-windows-x64` artifact for each successful `main` build.
+CI also publishes a `tabkit-windows-x64` artifact for each successful `main` build. The archive includes the `extension/` directory with the TapKit Web Dashboard `.trex` and static host runtime.
 
 ## Tableau configuration
 
@@ -190,10 +191,11 @@ create_parameter
 create_worksheet
 create_filter_action
 create_parameter_action
+create_web_dashboard
 create_dashboard
 ```
 
-Worksheet creation is intentionally narrow: bar, line, KPI, and text-table views over existing datasource fields. Dashboard creation supports nested rows/columns, fixed and weighted sizing, padding, gaps, text, worksheet zones, filter cards, and bounded worksheet presentation styles.
+Worksheet creation is intentionally narrow: bar, line, KPI, and text-table views over existing datasource fields. Native dashboard creation supports nested rows/columns, fixed and weighted sizing, padding, gaps, text, worksheet zones, filter cards, and bounded worksheet presentation styles. `create_web_dashboard` instead emits one full-canvas Dashboard Extension object and runs a bounded HTML/CSS/JavaScript bundle in the bundled sandbox host.
 
 Dashboard filter cards expose filters that already exist on the source worksheet. Cross-sheet interaction is available through filter actions; TapKit does not synthesize persisted `Apply to Worksheets` sharing state.
 
@@ -202,6 +204,7 @@ When a new object depends on another object created by TapKit, chain `workbook_e
 ## Current limits
 
 - worksheet authoring is limited to bar, line, KPI, and text-table views over existing fields;
+- web dashboards require the TapKit extension host; remote hosts must use HTTPS and Tableau may require safe-listing/full-data permission;
 - arbitrary raw XML mutation is not exposed;
 - action authoring is limited to filter actions and parameter actions;
 - full action/set/story lineage is not implemented;
@@ -232,6 +235,7 @@ Technical documentation is under [`docs/`](docs/README.md):
 - [Architecture](docs/ARCHITECTURE.md)
 - [Authoring](docs/AUTHORING.md)
 - [Dashboard authoring](docs/DASHBOARD.md)
+- [Web dashboard extension](docs/WEB_DASHBOARD.md)
 - [Performance](docs/PERFORMANCE.md)
 - [Rust API map](docs/API.md)
 - [Error contract](docs/ERRORS.md)
