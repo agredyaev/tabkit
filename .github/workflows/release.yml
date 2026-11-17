@@ -23,7 +23,7 @@ jobs:
             artifact: tabkit-windows-x64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - run: cargo test --release --locked --all-targets
