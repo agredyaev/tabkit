@@ -1,43 +1,69 @@
 name: Release
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
-    paths-ignore:
-      - README.md
-      - LICENSE
-      - SECURITY.md
-      - docs/**
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
 
 jobs:
-  checks:
-    uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            artifact: tabkit-linux-x64
+          - os: macos-14
+            artifact: tabkit-macos
+          - os: windows-2025
+            artifact: tabkit-windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: cargo test --release --locked --all-targets
+      - run: cargo build --release --locked --bin tabkit --bin tabkit-mcp
+      - name: Package Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/tabkit target/release/tabkit-mcp README.md LICENSE dist/
+          tar -czf "${{ matrix.artifact }}.tar.gz" -C dist .
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/tabkit.exe dist/
+          Copy-Item target/release/tabkit-mcp.exe dist/
+          Copy-Item README.md dist/
+          Copy-Item LICENSE dist/
+          Compress-Archive -Path dist/* -DestinationPath "${{ matrix.artifact }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+          if-no-files-found: ignore
 
   release:
-    needs: checks
-    runs-on: ubuntu-latest
+    name: GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
-      issues: write
-      pull-requests: write
     steps:
-      - id: release
-        uses: googleapis/release-please-action@v4
+      - uses: actions/download-artifact@v4
         with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-          target-branch: main
-      - if: steps.release.outputs.release_created == 'true'
-        uses: actions/download-artifact@v4
-        with:
-          name: tabkit-windows-x64
           path: dist
-      - if: steps.release.outputs.release_created == 'true'
-        env:
+          merge-multiple: true
+      - env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
-        run: |
-          gh release upload "$RELEASE_TAG" dist/tabkit-windows-x64.zip --repo "$GITHUB_REPOSITORY"
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --verify-tag --generate-notes

@@ -1,207 +1,232 @@
-mod app;
-mod assertions;
-mod catalog;
-mod config;
-#[path = "workbook/edit.rs"]
-mod edit;
-mod error;
-#[path = "workbook/formula.rs"]
-mod formula;
-mod fs;
-#[path = "integrations/hyper.rs"]
-mod hyper;
-mod mcp;
-#[path = "integrations/oauth.rs"]
-mod oauth;
-#[path = "workbook/package.rs"]
-mod package;
-#[path = "workbook/patch.rs"]
-mod patch;
-#[cfg(any(feature = "hyper", test))]
-mod process_tree;
-#[path = "integrations/rest.rs"]
-mod rest;
-#[path = "workbook/scalar.rs"]
-mod scalar;
-#[cfg(any(feature = "hyper", test))]
-#[path = "integrations/sql.rs"]
-mod sql;
-#[path = "workbook/validation.rs"]
-mod validation;
-mod wire;
-#[path = "workbook/workbook.rs"]
-mod workbook;
-#[path = "workbook/xml.rs"]
-mod xml;
-use clap::{
-    Parser,
-    Subcommand
-};
-use error::{
-    Error,
-    Result,
-    require
-};
-use serde_json::{
-    Value,
-    json
-};
+use clap::{Args, Parser, Subcommand};
 use std::{
-    io::{
-        Read,
-        Write
-    },
-    path::PathBuf,
-    sync::Arc
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
 };
-use tokio_util::sync::CancellationToken;
+use tabkit::{
+    Error,
+    edit::{self, Batch},
+    lineage::{Direction, Kind, Lineage},
+    package::{Limits, Package},
+    rest,
+    workbook::{self, Workbook},
+};
+
 #[derive(Parser)]
-#[command(name="tabkit",version,about="Focused Tableau 2025 tools for Amazon Quick Desktop")]
-struct Cli{
-    #[command(flatten)]
-    startup:config::StartupArgs,
-    #[command(subcommand)]command:Command,
+#[command(name = "tabkit")]
+#[command(about = "Headless Tableau 2026.2.4 workbook runtime/compiler")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
 }
+
 #[derive(Subcommand)]
-enum Command{
-    /// Serve the same tools over local MCP stdio; stdout is exclusively protocol.
-    Mcp,
-    /// Emit actual machine-readable tool names, descriptions and JSON Schemas.
-    Tools,
-    /// Call a tool with JSON arguments. '-' reads stdin; file paths here are operator inputs.
-    Call{
-        tool:String,
-        #[arg(long,default_value="-")]args:PathBuf
+enum Command {
+    Open {
+        input: PathBuf,
     },
-    /// Convenience aliases; they dispatch into the same application functions.
-    Inspect{
-        input:String
+    Inspect {
+        input: PathBuf,
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        query: Option<String>,
     },
-    Validate{
-        input:String
+    Lineage {
+        input: PathBuf,
+        #[arg(long)]
+        from: Option<String>,
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long)]
+        upstream: bool,
     },
-    Test{
-        input:String,
-        suite:String
+    Edit {
+        input: PathBuf,
+        spec: PathBuf,
+        output: PathBuf,
+    },
+    Download {
+        #[command(flatten)]
+        tableau: TableauArgs,
+        workbook_id: String,
+        output: PathBuf,
+        #[arg(long, default_value_t = true)]
+        include_extract: bool,
+    },
+    Validate {
+        #[command(flatten)]
+        tableau: TableauArgs,
+        input: PathBuf,
+    },
+    Publish {
+        #[command(flatten)]
+        tableau: TableauArgs,
+        input: PathBuf,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        project_id: String,
+        #[arg(long)]
+        overwrite: bool,
+    },
+    Job {
+        #[command(flatten)]
+        tableau: TableauArgs,
+        job_id: String,
     },
 }
-fn main(){
-    // Same-executable native worker. It never hosts MCP or receives OAuth/Tableau session tokens.
-    if std::env::args().nth(1).as_deref()==Some("__hyper-worker"){
-        if let Err(e)=hyper::worker_main(){
-            let _=writeln!(std::io::stdout(),"{}",json!({
-                "error":e
-            }));
-            std::process::exit(1);
-        }
-        return;
-    }
-    let exit=match run(){
-        Ok(code)=>code,
-        Err(e)=>{
-            let _=writeln!(std::io::stderr(),"{}",json!({
-                "error":e
-            }));
-            2
-        }
-    };
-    std::process::exit(exit);
+
+#[derive(Clone, Args)]
+struct TableauArgs {
+    #[arg(long, env = "TABLEAU_SERVER")]
+    server: String,
+    #[arg(long, env = "TABLEAU_SITE", default_value = "")]
+    site: String,
+    #[arg(long, env = "TABLEAU_API_VERSION", default_value = "3.29")]
+    api_version: String,
+    #[arg(long, env = "TABLEAU_PAT_NAME")]
+    pat_name: String,
+    #[arg(
+        long,
+        env = "TABLEAU_PAT_SECRET_ENV",
+        default_value = "TABLEAU_PAT_SECRET"
+    )]
+    pat_secret_env: String,
+    #[arg(long, default_value_t = 120)]
+    timeout_seconds: u64,
 }
-fn run()->Result<i32>{
-    let cli=Cli::parse();
-    if matches!(&cli.command,Command::Tools){
-        print_json(&serde_json::to_value(catalog::tools()?)?)?;
-        return Ok(0);
+
+impl TableauArgs {
+    fn config(self) -> rest::Config {
+        rest::Config {
+            server: self.server,
+            site: self.site,
+            api_version: self.api_version,
+            pat_name: self.pat_name,
+            pat_secret_env: self.pat_secret_env,
+            timeout: Duration::from_secs(self.timeout_seconds),
+        }
     }
-    // Blocking reqwest client is constructed outside a Tokio runtime for CLI calls.
-    let app=Arc::new(app::App::new(config::Config::from_startup(cli.startup)?)?);
-    let (tool,args)=match cli.command{
-        Command::Mcp=>{
-            let runtime=tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-            runtime.block_on(mcp::serve(app))?;
-            return Ok(0);
-        },
-        Command::Tools=>return Err(Error::new("INTERNAL","Unreachable command route")),
-        Command::Call{
-            tool,
-            args
+}
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("{}: {}", error.code, error.message);
+        std::process::exit(1);
+    }
+}
+
+fn run() -> tabkit::Result<()> {
+    let limits = Limits::default();
+
+    match Cli::parse().command {
+        Command::Open { input } => {
+            let (_package, workbook) = open(&input, &limits)?;
+            print_json(&workbook.summary())
         }
-        =>{
-            let max=app.cfg.limits.input_json_bytes;
-            let bytes=if args.as_os_str()=="-"{
-                let mut b=Vec::new();
-                std::io::stdin().take(max+1).read_to_end(&mut b)?;
-                require(b.len()as u64<=max,"LIMIT","Arguments exceed limit")?;
-                b
-            }else{
-                fs::read_bounded(&args,max)?
-            };
-            (tool,wire::decode(&bytes,max)?)
-        },
-        Command::Inspect{
-            input
+        Command::Inspect { input, kind, query } => {
+            let (_package, workbook) = open(&input, &limits)?;
+            print_json(&workbook::inspect(&workbook, &kind, query.as_deref())?)
         }
-        =>("workbook_inspect".into(),json!({
-            "input":input
-        })),
-        Command::Validate{
-            input
-        }
-        =>("workbook_validate".into(),json!({
-            "input":input
-        })),
-        Command::Test{
+        Command::Lineage {
             input,
-            suite
+            from,
+            kind,
+            upstream,
+        } => {
+            let (_package, workbook) = open(&input, &limits)?;
+            let lineage = Lineage::build(&workbook)?;
+            if let Some(query) = from {
+                let kind = kind
+                    .as_deref()
+                    .map(|value| value.parse::<Kind>())
+                    .transpose()?;
+                let matches = lineage.find_kind(&query, kind);
+                if matches.len() != 1 {
+                    return print_json(&serde_json::json!({
+                        "query": query,
+                        "matches": matches,
+                        "error": if matches.is_empty() { "not_found" } else { "ambiguous" }
+                    }));
+                }
+                let node = matches[0];
+                let direction = if upstream {
+                    Direction::Upstream
+                } else {
+                    Direction::Downstream
+                };
+                let trace = lineage
+                    .trace(node.id, direction)
+                    .ok_or_else(|| Error::new("INTERNAL", "Lineage node disappeared"))?;
+                print_json(&trace)
+            } else {
+                print_json(&serde_json::json!({
+                    "nodes": lineage.nodes,
+                    "edges": lineage.edges,
+                    "gaps": lineage.gaps
+                }))
+            }
         }
-        =>("workbook_test".into(),json!({
-            "input":input,
-            "suite":suite
-        })),
-    };
-    let result=app.dispatch(&tool,args,&CancellationToken::new())?;
-    let failed=mcp::result_failed(&result);
-    print_json(&result)?;
-    Ok(if failed{
-        1
-    }else{
-        0
-    })
+        Command::Edit {
+            input,
+            spec,
+            output,
+        } => {
+            let (package, workbook) = open(&input, &limits)?;
+            let batch: Batch = serde_json::from_slice(&fs::read(spec)?)
+                .map_err(|error| Error::new("SPEC_JSON", error.to_string()))?;
+            let candidate = edit::apply(&workbook, &batch, limits.xml_bytes)?;
+            let candidate_package =
+                package.write_candidate(&output, candidate.text().as_bytes(), &limits)?;
+            print_json(&serde_json::json!({
+                "output": output,
+                "package_sha256": candidate_package.sha256,
+                "twb_sha256": candidate.receipt.sha256,
+                "calculations": candidate.receipt.calculations,
+                "dashboards": candidate.receipt.dashboards
+            }))
+        }
+        Command::Download {
+            tableau,
+            workbook_id,
+            output,
+            include_extract,
+        } => {
+            let rest = rest::Rest::sign_in(tableau.config())?;
+            let receipt =
+                rest.download_workbook(&workbook_id, include_extract, &output, &limits)?;
+            print_json(&receipt)
+        }
+        Command::Validate { tableau, input } => {
+            let rest = rest::Rest::sign_in(tableau.config())?;
+            print_json(&rest.validate_workbook(&input, &limits)?)
+        }
+        Command::Publish {
+            tableau,
+            input,
+            name,
+            project_id,
+            overwrite,
+        } => {
+            let rest = rest::Rest::sign_in(tableau.config())?;
+            print_json(&rest.publish_workbook(&input, &name, &project_id, overwrite, &limits)?)
+        }
+        Command::Job { tableau, job_id } => {
+            let rest = rest::Rest::sign_in(tableau.config())?;
+            print_json(&rest.job(&job_id)?)
+        }
+    }
 }
-fn print_json(v:&Value)->Result<()>{
-    let stdout=std::io::stdout();
-    let mut out=stdout.lock();
-    serde_json::to_writer_pretty(&mut out,v)?;
-    out.write_all(b"\n")?;
+
+fn open(path: &Path, limits: &Limits) -> tabkit::Result<(Package, Workbook)> {
+    let (package, twb) = Package::open(path, limits)?;
+    let workbook = Workbook::open(twb)?;
+    Ok((package, workbook))
+}
+
+fn print_json(value: &impl serde::Serialize) -> tabkit::Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "../tests/unit/regression.rs"]
-mod regression;
-
-#[cfg(test)]
-#[path = "../tests/unit/properties.rs"]
-mod properties;
-#[cfg(test)]
-#[path = "../tests/unit/behavioral.rs"]
-mod behavioral;
-
-#[cfg(test)]
-#[path = "../tests/unit/edge_cases.rs"]
-mod edge_cases;
-
-#[cfg(test)]
-#[path = "../tests/unit/local_core_tests.rs"]
-mod local_core_tests;
-
-#[cfg(test)]
-#[path = "../tests/unit/xml_index_tests.rs"]
-mod xml_index_tests;
-
-#[cfg(test)]
-#[path = "../tests/unit/ownership_tests.rs"]
-mod ownership_tests;
-#[cfg(test)]
-#[path = "../tests/unit/lineage_tests.rs"]
-mod lineage_tests;

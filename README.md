@@ -1,44 +1,224 @@
-# tabkit
+# TapKit
 
-[![CI](https://img.shields.io/github/actions/workflow/status/agredyaev/tabkit/ci.yml?branch=dev&label=CI&logo=githubactions&logoColor=white&style=for-the-badge)](https://github.com/agredyaev/tabkit/actions/workflows/ci.yml)
-[![Rust 1.88+](https://img.shields.io/badge/Rust-1.88%2B-EF6C00?logo=rust&logoColor=white&style=for-the-badge)](Cargo.toml)
-[![MIT License](https://img.shields.io/badge/License-MIT-3949AB?logo=opensourceinitiative&logoColor=white&style=for-the-badge)](LICENSE)
-[![Security policy](https://img.shields.io/badge/Security-Policy-00897B?style=for-the-badge)](SECURITY.md)
+TapKit is a headless Tableau 2026.2.4 workbook runtime and MCP server.
 
-`tabkit` is a Rust CLI and MCP server for working with Tableau 2025 workbooks. It reads `.twb` and `.twbx` files from a chosen workspace, exposes their known structure, and makes supported edits through a reviewable plan. The CLI and MCP server use the same tools.
+Version: **0.9.0**
 
-## What it does
+## Target
 
-- Inspect fields, calculations, parameters, filters, sheets, dependencies, and package contents.
-- Navigate a read-only graph from source tables and SQL through fields, calculations, filters and actions to worksheets, dashboards and stories. Inspect joins, relationships, sets, tooltips, custom visual encodings and table-calculation settings on demand. Export known links with explicit coverage gaps.
-- Validate known workbook rules, compare workbooks, and run declarative assertions.
-- Plan and apply typed calculation, parameter, and filter edits to a **new** workbook file while preserving unrelated content.
+- Tableau Server / Cloud workbook format: **26.2**
+- Tableau product target: **2026.2.4**
+- Tableau REST API: **3.29**
+- Tableau workbook XSD contract: **2026.2.0**
+- Rust: **1.88+**
 
-## Optional integrations
-
-- **Tableau REST:** Configure a Tableau server and OAuth or PAT credentials to search and download workbooks. Publishing requires `--publish-enabled`, an allowed project, and separate prepare and confirm calls.
-- **Hyper:** The Windows x64 release ZIP includes read-only Hyper queries in CLI and MCP. Extract the whole ZIP and launch `tabkit.exe` from it; `tableauhyperapi.dll` and `hyper/` must stay beside the executable. Pass `--allow-data-output` to permit query results. Source builds need `--features hyper` and the official C++ SDK.
-
-## Try it locally
-
-Requires Rust 1.88 or newer. The workspace must already exist and be given as an absolute path.
-
-```sh
-cargo build --release --locked
-./target/release/tabkit --workspace "$(pwd)/examples" inspect synthetic.twb
-./target/release/tabkit --workspace "$(pwd)/examples" validate synthetic.twb
-```
-
-On Windows, download `tabkit-windows-x64.zip` from Releases and extract it before running `tabkit.exe` with an absolute Windows workspace path. Run `tabkit --workspace <absolute-path> tools` to see the available tools and their JSON schemas. Startup options go before the subcommand. To inspect an extract from MCP, enable `--allow-data-output`, use `workbook_extract_hyper` for a `.twbx` member if needed, then call `hyper_query` with the `.hyper` path and its SHA-256.
-
-To use MCP, configure your client to launch `tabkit --workspace <absolute-path> mcp` over stdio. See the [MCP configuration examples](examples/quick-mcp.example.json) for Tableau OAuth and [PAT](examples/quick-mcp-pat.example.json). For local workbook work, Tableau credentials are unnecessary.
-
-For lineage, call `workbook_lineage_open` once per MCP session, find a node, then use `workbook_lineage_impact` for possible downstream/upstream effects or `workbook_lineage_neighbors` for direct dependency and structural links. Use `workbook_lineage_details` for source definitions, filter conditions, action settings, tooltip text and table-calculation configuration. Source tables and extract copies have distinct scope and field-origin links. Physical joins and logical relationships have distinct links; a relationship does not itself propagate impact to the other table. Check `workbook_lineage_gaps` before concluding a path is absent. `workbook_lineage_export` writes graph schema v2, including details and gaps, to a new JSON file. In a one-shot CLI call, export accepts `input` instead of a session `snapshot_id`. Global `field` node IDs match editable `workbook_inspect` field IDs; other node kinds are read-only. SQL is parsed conservatively for table references and is never executed.
-
-For edits, copy a workbook into a separate workspace, inspect it, then call `workbook_plan` and `workbook_apply` with reviewed JSON arguments. See the [plan](examples/plan.json) and [apply](examples/apply.template.json) examples. The source workbook is never overwritten.
+TapKit does not ship a second Tableau schema validator. It keeps a small typed projection of the workbook objects required for inspection, lineage, and supported edits. Final workbook validation is delegated to Tableau REST `validateWorkbook`.
 
 ## Scope
 
-Local validation checks XML and the Tableau structures `tabkit` understands; it does not execute Tableau or prove full workbook semantics. Lineage includes source tables, joins, relationships, SQL table reads, sets/groups, actions, tooltip references, parameter controls, stories, table-calculation configuration and the existing field-to-view routes. Unresolved references and unsupported shapes appear as coverage gaps. Initial SQL effects, interactive action execution and table-calculation results require Tableau. Unsupported edit shapes are rejected. Live Tableau and Amazon Quick Desktop still require environment qualification; Windows CI exercises native Hyper through the packaged executable and a real SDK extract.
+TapKit supports:
 
-Run `cargo test --locked` for the local test suite. See the [architecture decisions](docs/adr/README.md) for the supported scope.
+- TWB and TWBX open/repack;
+- datasource, connection, relation, field, calculation, worksheet, and dashboard indexing;
+- Initial SQL and Custom SQL lineage;
+- SQL Server local `#temp` lineage across Initial SQL and Custom SQL;
+- calculation creation;
+- dashboard creation from existing worksheets;
+- dashboard layout, filter cards, and bounded presentation styling;
+- Tableau workbook search and download;
+- Tableau `validateWorkbook`;
+- Tableau publish and background job polling;
+- MCP over stdio and Streamable HTTP.
+
+TapKit does not automate Tableau Desktop.
+
+## Binaries
+
+The repository builds two binaries:
+
+- `tabkit` — CLI;
+- `tabkit-mcp` — MCP server.
+
+## Build
+
+```bash
+cargo build --release --locked
+```
+
+Run the test suite:
+
+```bash
+cargo test --release --locked --all-targets
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+```
+
+## Windows
+
+Install Rust with the MSVC toolchain, clone the repository, then run:
+
+```powershell
+cargo build --release --locked
+cargo test --release --locked --all-targets
+```
+
+Outputs:
+
+```text
+target\release\tabkit.exe
+target\release\tabkit-mcp.exe
+```
+
+CI also publishes a `tabkit-windows-x64` artifact for each successful `main` build.
+
+## Tableau configuration
+
+Set Tableau connection settings through environment variables:
+
+```text
+TABLEAU_SERVER=https://tableau.example.com
+TABLEAU_SITE=site-content-url
+TABLEAU_PAT_NAME=pat-name
+TABLEAU_PAT_SECRET=pat-secret
+```
+
+The PAT secret is read from an environment variable. It is not accepted as a CLI argument.
+
+## MCP
+
+### stdio
+
+```bash
+tabkit-mcp --transport stdio
+```
+
+Local paths are allowed with stdio.
+
+### Streamable HTTP
+
+```bash
+tabkit-mcp --transport http --bind 127.0.0.1:8000
+```
+
+Endpoint:
+
+```text
+http://127.0.0.1:8000/mcp
+```
+
+Set `TABKIT_MCP_TOKEN` to require a bearer token.
+
+Remote HTTP does not allow arbitrary local workbook paths unless explicitly enabled.
+
+## MCP tools
+
+```text
+tableau_search_workbooks
+workbook_open
+workbook_inspect
+workbook_lineage
+workbook_edit
+workbook_validate
+workbook_publish
+tableau_job
+workbook_close
+```
+
+Typical flow:
+
+```text
+tableau_search_workbooks
+-> workbook_open
+-> workbook_inspect
+-> workbook_lineage
+-> workbook_edit
+-> workbook_validate
+-> workbook_publish
+-> tableau_job
+-> workbook_close
+```
+
+## Validation boundary
+
+TapKit performs local structural admission, indexing, edit preconditions, package integrity checks, stale-base checks, and post-edit reparse checks.
+
+Tableau Server remains the authority for Tableau workbook validity:
+
+```text
+candidate TWB
+-> REST 3.29 validateWorkbook
+-> Tableau XSD validation
+-> Tableau semantic validation
+```
+
+For TWBX, `workbook_validate` submits the embedded TWB. Package/resource acceptance is exercised by publish.
+
+## Lineage
+
+Lineage covers:
+
+```text
+SQL source
+-> Initial SQL / Custom SQL
+-> relation / datasource
+-> field
+-> calculation
+-> worksheet
+-> dashboard
+```
+
+SQL Server local temporary tables are connection-scoped:
+
+```text
+source table
+-> #temp
+-> Custom SQL
+-> Tableau field
+```
+
+Unsupported or ambiguous paths are returned as explicit lineage gaps. TapKit does not invent missing lineage.
+
+## Authoring
+
+Supported edit operations:
+
+```text
+create_calculation
+create_dashboard
+```
+
+Dashboard creation uses existing worksheets. Supported dashboard primitives include nested rows/columns, fixed and weighted sizing, padding, gaps, text, worksheet zones, filter cards, and bounded worksheet presentation styles.
+
+Dashboard filter cards expose filters that already exist on the source worksheet. Cross-sheet/global `Apply to Worksheets` authoring is not synthesized.
+
+## Current limits
+
+- worksheet/chart creation from scratch is not implemented;
+- arbitrary raw XML mutation is not exposed;
+- full action/set/story lineage is not implemented;
+- exact source-column attribution through arbitrary SQL expressions and mutations is incomplete;
+- SQL Server `##global` temp-table producer scope is not modeled;
+- Tableau authentication uses PAT;
+- rendering and screenshot feedback are not implemented.
+
+## Security
+
+Repository checks include:
+
+- `cargo fmt`;
+- Clippy with warnings denied;
+- release tests on Linux, macOS, and Windows;
+- `cargo-deny` dependency, source, license, and advisory policy checks;
+- RustSec audit;
+- Dependabot for Cargo and GitHub Actions;
+- `unsafe_code = "deny"`;
+- denied `unwrap`, `expect`, `dbg!`, `todo!`, and `unimplemented!` in production policy, with explicit test-only allowances where required.
+
+See [SECURITY.md](SECURITY.md).
+
+## Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [DASHBOARD.md](DASHBOARD.md)
+- [PERFORMANCE.md](PERFORMANCE.md)
+- [CHANGELOG.md](CHANGELOG.md)

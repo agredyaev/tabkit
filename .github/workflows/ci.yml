@@ -1,72 +1,66 @@
 name: CI
 
 on:
-  pull_request:
-    branches: [dev, main]
-    paths-ignore:
-      - README.md
-      - LICENSE
-      - SECURITY.md
-      - docs/**
   push:
-    branches: [dev]
-    paths-ignore:
-      - README.md
-      - LICENSE
-      - SECURITY.md
-      - docs/**
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_call:
 
-jobs:
-  deny:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          arguments: --locked
+permissions:
+  contents: read
 
-  windows:
-    runs-on: windows-2025
-    permissions:
-      contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: cargo test --locked
-      - name: Install pinned Hyper SDK
+        with:
+          persist-credentials: false
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: cargo test --release --locked --all-targets
+
+  windows-artifact:
+    name: Windows artifact
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: cargo build --release --locked --bin tabkit --bin tabkit-mcp
+      - name: Package
         shell: pwsh
         run: |
-          $ProgressPreference = 'SilentlyContinue'
-          $url = 'https://downloads.tableau.com/tssoftware//tableauhyperapi-cxx-windows-x86_64-release-main.0.0.26479.r96880f6a.zip'
-          curl.exe -fL --retry 3 --max-time 300 --output hyper-sdk.zip $url
-          $actual = (Get-FileHash hyper-sdk.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne 'd37f59511322c6060d24ac77a009e44819423ff85202d05a624e2dc64f856ff5') { throw 'Hyper SDK checksum mismatch' }
-          Expand-Archive hyper-sdk.zip -DestinationPath sdk
-          $sdk = (Get-ChildItem sdk -Directory | Select-Object -First 1).FullName
-          "HYPER_SDK_DIR=$sdk" >> $env:GITHUB_ENV
-          "$sdk/bin" >> $env:GITHUB_PATH
-      - run: cargo test --locked --features hyper
-      - run: cargo build --release --locked --features hyper
-      - name: Package Windows runtime
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory dist | Out-Null
+          New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/tabkit.exe dist/
-          Copy-Item "$env:HYPER_SDK_DIR/bin/tableauhyperapi.dll" dist/
-          Copy-Item "$env:HYPER_SDK_DIR/bin/hyper" dist/hyper -Recurse
-          Copy-Item LICENSE dist/TABKIT_LICENSE.txt
-          Copy-Item "$env:HYPER_SDK_DIR/LICENSE" dist/HYPER_API_LICENSE.txt
-          Copy-Item "$env:HYPER_SDK_DIR/NOTICES.txt" dist/HYPER_API_NOTICES.txt
-          Copy-Item "$env:HYPER_SDK_DIR/HYPER_API_OSS_disclosure.txt" dist/HYPER_API_OSS_disclosure.txt
+          Copy-Item target/release/tabkit-mcp.exe dist/
+          Copy-Item README.md dist/
+          Copy-Item LICENSE dist/
           Compress-Archive -Path dist/* -DestinationPath tabkit-windows-x64.zip
-          Expand-Archive tabkit-windows-x64.zip -DestinationPath smoke
-      - name: Smoke packaged CLI and MCP with a real extract
-        shell: pwsh
-        run: python scripts/hyper_smoke.py smoke/tabkit.exe "$env:HYPER_SDK_DIR" "$env:HYPER_SDK_DIR/examples/data/sample_extracts/superstore_sample_denormalized.hyper"
       - uses: actions/upload-artifact@v4
         with:
           name: tabkit-windows-x64
           path: tabkit-windows-x64.zip
           if-no-files-found: error
+          retention-days: 14

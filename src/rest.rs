@@ -1,0 +1,748 @@
+use crate::{
+    Error, REST_API_VERSION, Result, TABLEAU_PRODUCT_TARGET,
+    package::{self, Limits, Package},
+    require,
+};
+use reqwest::{
+    Method, Url,
+    blocking::{Client, RequestBuilder, Response, multipart},
+    header::{ACCEPT, CONTENT_TYPE, HeaderValue},
+};
+use serde::Serialize;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+#[derive(Clone)]
+pub struct Config {
+    pub server: String,
+    pub site: String,
+    pub api_version: String,
+    pub pat_name: String,
+    pub pat_secret_env: String,
+    pub timeout: Duration,
+}
+
+impl Config {
+    pub fn validate(&self) -> Result<()> {
+        let url = Url::parse(&self.server)
+            .map_err(|_| Error::new("CONFIG", "Invalid Tableau server URL"))?;
+        require(
+            url.scheme() == "https" && url.host_str().is_some(),
+            "CONFIG",
+            "Tableau server must be an HTTPS URL",
+        )?;
+        require(
+            self.api_version == REST_API_VERSION,
+            "CONFIG",
+            format!(
+                "TapKit targets Tableau REST {REST_API_VERSION} (Server {TABLEAU_PRODUCT_TARGET})"
+            ),
+        )?;
+        require(
+            !self.pat_name.trim().is_empty(),
+            "CONFIG",
+            "PAT name cannot be empty",
+        )?;
+        require(
+            !self.pat_secret_env.trim().is_empty(),
+            "CONFIG",
+            "PAT secret environment variable name cannot be empty",
+        )
+    }
+}
+
+pub struct Rest {
+    config: Config,
+    client: Client,
+    token: String,
+    site_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DownloadReceipt {
+    pub bytes: u64,
+    pub sha256: String,
+    pub format: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WorkbookInfo {
+    pub id: String,
+    pub name: String,
+    pub content_url: Option<String>,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
+    pub updated_at: Option<String>,
+    pub has_extracts: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Validation {
+    pub valid: bool,
+    pub response: Value,
+}
+
+impl Rest {
+    pub fn sign_in(config: Config) -> Result<Self> {
+        config.validate()?;
+        let client = Client::builder()
+            .https_only(true)
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(config.timeout)
+            .user_agent(concat!("tabkit/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+
+        let secret = std::env::var(&config.pat_secret_env).map_err(|_| {
+            Error::new(
+                "AUTH_CONFIG",
+                format!(
+                    "PAT secret environment variable {} is not set",
+                    config.pat_secret_env
+                ),
+            )
+        })?;
+        require(
+            !secret.trim().is_empty(),
+            "AUTH_CONFIG",
+            "PAT secret is empty",
+        )?;
+
+        let url = api_url(&config, None, &["auth", "signin"])?;
+        let response = client
+            .post(url)
+            .header(ACCEPT, "application/json")
+            .json(&json!({
+                "credentials": {
+                    "personalAccessTokenName": config.pat_name,
+                    "personalAccessTokenSecret": secret,
+                    "site": { "contentUrl": config.site }
+                }
+            }))
+            .send()?;
+        let value = read_json(response)?;
+        let credentials = value
+            .get("credentials")
+            .ok_or_else(|| Error::new("REST_SHAPE", "Sign-in response lacks credentials"))?;
+        let token = credentials
+            .get("token")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| Error::new("REST_SHAPE", "Sign-in response lacks token"))?
+            .to_owned();
+        let site_id = credentials
+            .pointer("/site/id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| Error::new("REST_SHAPE", "Sign-in response lacks site id"))?
+            .to_owned();
+
+        Ok(Self {
+            config,
+            client,
+            token,
+            site_id,
+        })
+    }
+
+    pub fn search_workbooks(&self, query: &str, limit: usize) -> Result<Vec<WorkbookInfo>> {
+        let query = query.trim();
+        require(
+            !query.is_empty(),
+            "ARGUMENT",
+            "Workbook query cannot be empty",
+        )?;
+        require(
+            (1..=100).contains(&limit),
+            "ARGUMENT",
+            "Workbook search limit must be 1..100",
+        )?;
+
+        let mut exact_url = self.site_url(&["workbooks"])?;
+        exact_url
+            .query_pairs_mut()
+            .append_pair("filter", &format!("name:eq:{query}"))
+            .append_pair("pageSize", &limit.to_string())
+            .append_pair(
+                "fields",
+                "id,name,contentUrl,updatedAt,hasExtracts,project.id,project.name",
+            );
+        let exact = workbook_infos(self.send_json(self.request(Method::GET, exact_url)?)?)?;
+        if !exact.is_empty() {
+            return Ok(exact.into_iter().take(limit).collect());
+        }
+
+        let mut results = Vec::new();
+        let needle = query.to_lowercase();
+        let page_size = 1000usize;
+        for page in 1..=10usize {
+            let mut url = self.site_url(&["workbooks"])?;
+            url.query_pairs_mut()
+                .append_pair("pageSize", &page_size.to_string())
+                .append_pair("pageNumber", &page.to_string())
+                .append_pair(
+                    "fields",
+                    "id,name,contentUrl,updatedAt,hasExtracts,project.id,project.name",
+                );
+            let page_items = workbook_infos(self.send_json(self.request(Method::GET, url)?)?)?;
+            let page_len = page_items.len();
+            for item in page_items {
+                if item.name.to_lowercase().contains(&needle) {
+                    results.push(item);
+                    if results.len() == limit {
+                        return Ok(results);
+                    }
+                }
+            }
+            if page_len < page_size {
+                break;
+            }
+        }
+        Ok(results)
+    }
+
+    pub fn download_workbook_auto(
+        &self,
+        workbook_id: &str,
+        include_extract: bool,
+        directory: &Path,
+        limits: &Limits,
+    ) -> Result<(PathBuf, DownloadReceipt)> {
+        require(
+            directory.is_dir(),
+            "PATH",
+            "Download directory does not exist",
+        )?;
+
+        let mut url = self.site_url(&["workbooks", workbook_id, "content"])?;
+        url.query_pairs_mut().append_pair(
+            "includeExtract",
+            if include_extract { "true" } else { "false" },
+        );
+
+        let mut response = self.request(Method::GET, url)?.send()?;
+        require(
+            response.status().is_success(),
+            "REST_REJECTED",
+            format!("Tableau returned HTTP {}", response.status().as_u16()),
+        )?;
+
+        let mut temp = tempfile::NamedTempFile::new_in(directory)?;
+        let mut hash = Sha256::new();
+        let mut total = 0u64;
+        let mut prefix = [0u8; 4];
+        let mut prefix_len = 0usize;
+        let mut buffer = [0u8; 64 * 1024];
+
+        loop {
+            let count = response.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            total = total
+                .checked_add(count as u64)
+                .ok_or_else(|| Error::new("LIMIT", "Download size overflow"))?;
+            require(
+                total <= limits.file_bytes,
+                "LIMIT",
+                "Downloaded workbook exceeds configured limit",
+            )?;
+
+            if prefix_len < prefix.len() {
+                let take = count.min(prefix.len() - prefix_len);
+                prefix[prefix_len..prefix_len + take].copy_from_slice(&buffer[..take]);
+                prefix_len += take;
+            }
+
+            hash.update(&buffer[..count]);
+            temp.write_all(&buffer[..count])?;
+        }
+        require(total > 0, "REST_SHAPE", "Downloaded workbook is empty")?;
+
+        let format = if prefix_len == 4 && prefix == *b"PK\x03\x04" {
+            "twbx"
+        } else {
+            "twb"
+        };
+        temp.as_file_mut().flush()?;
+        temp.as_file().sync_all()?;
+
+        let output = directory.join(format!(
+            "{}-{}.{}",
+            workbook_id,
+            uuid::Uuid::new_v4().simple(),
+            format
+        ));
+        temp.persist_noclobber(&output)
+            .map_err(|error| Error::new("OUTPUT_EXISTS", error.error.to_string()))?;
+        Package::open(&output, limits)?;
+
+        Ok((
+            output,
+            DownloadReceipt {
+                bytes: total,
+                sha256: format!("{:x}", hash.finalize()),
+                format: if format == "twbx" { "twbx" } else { "twb" },
+            },
+        ))
+    }
+
+    pub fn download_workbook(
+        &self,
+        workbook_id: &str,
+        include_extract: bool,
+        output: &Path,
+        limits: &Limits,
+    ) -> Result<DownloadReceipt> {
+        require(
+            !output.exists(),
+            "OUTPUT_EXISTS",
+            "Refusing to overwrite output",
+        )?;
+        let extension = output
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        require(
+            matches!(extension, "twb" | "twbx"),
+            "FILE_TYPE",
+            "Download output must end in .twb or .twbx",
+        )?;
+
+        let mut url = self.site_url(&["workbooks", workbook_id, "content"])?;
+        url.query_pairs_mut().append_pair(
+            "includeExtract",
+            if include_extract { "true" } else { "false" },
+        );
+
+        let mut response = self.request(Method::GET, url)?.send()?;
+        require(
+            response.status().is_success(),
+            "REST_REJECTED",
+            format!("Tableau returned HTTP {}", response.status().as_u16()),
+        )?;
+
+        let parent = output
+            .parent()
+            .ok_or_else(|| Error::new("PATH", "Download output has no parent"))?;
+        let mut temp = tempfile::Builder::new()
+            .suffix(if extension == "twbx" { ".twbx" } else { ".twb" })
+            .tempfile_in(parent)?;
+        let mut hash = Sha256::new();
+        let mut total = 0u64;
+        let mut prefix = Vec::new();
+        let mut buffer = [0u8; 64 * 1024];
+
+        loop {
+            let count = response.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            total = total
+                .checked_add(count as u64)
+                .ok_or_else(|| Error::new("LIMIT", "Download size overflow"))?;
+            require(
+                total <= limits.file_bytes,
+                "LIMIT",
+                "Downloaded workbook exceeds configured limit",
+            )?;
+            if prefix.len() < 8 {
+                prefix.extend_from_slice(&buffer[..count.min(8 - prefix.len())]);
+            }
+            hash.update(&buffer[..count]);
+            temp.write_all(&buffer[..count])?;
+        }
+        require(total > 0, "REST_SHAPE", "Downloaded workbook is empty")?;
+
+        let returned = if prefix.starts_with(b"PK\x03\x04") {
+            "twbx"
+        } else {
+            "twb"
+        };
+        require(
+            returned == extension,
+            "FILE_TYPE",
+            format!("Tableau returned {returned}; output path uses .{extension}"),
+        )?;
+
+        temp.as_file_mut().flush()?;
+        temp.as_file().sync_all()?;
+        Package::open(temp.path(), limits)?;
+        let sha256 = format!("{:x}", hash.finalize());
+        temp.persist_noclobber(output)
+            .map_err(|error| Error::new("OUTPUT_EXISTS", error.error.to_string()))?;
+
+        Ok(DownloadReceipt {
+            bytes: total,
+            sha256,
+            format: if returned == "twbx" { "twbx" } else { "twb" },
+        })
+    }
+
+    pub fn validate_workbook(&self, path: &Path, limits: &Limits) -> Result<Validation> {
+        let (_package, twb) = Package::open(path, limits)?;
+        let part = multipart::Part::bytes(twb)
+            .file_name("candidate.twb")
+            .mime_str("application/xml")
+            .map_err(|_| Error::new("HTTP", "Failed to build validation multipart"))?;
+        let form = multipart::Form::new().part("tableau_workbook", part);
+        let response = self
+            .request(
+                Method::POST,
+                self.site_url(&["workbooks", "validateWorkbook"])?,
+            )?
+            .multipart(form)
+            .send()?;
+
+        let status = response.status();
+        let body = read_json_any_status(response)?;
+        if status.is_success() {
+            Ok(Validation {
+                valid: true,
+                response: body,
+            })
+        } else if status.as_u16() == 422 {
+            Ok(Validation {
+                valid: false,
+                response: body,
+            })
+        } else {
+            Err(Error::new(
+                "REST_REJECTED",
+                format!("Tableau validation returned HTTP {}", status.as_u16()),
+            ))
+        }
+    }
+
+    pub fn publish_workbook(
+        &self,
+        path: &Path,
+        name: &str,
+        project_id: &str,
+        overwrite: bool,
+        limits: &Limits,
+    ) -> Result<Value> {
+        require(
+            !name.trim().is_empty(),
+            "ARGUMENT",
+            "Publish workbook name cannot be empty",
+        )?;
+        let file_type = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        require(
+            matches!(file_type, "twb" | "twbx"),
+            "FILE_TYPE",
+            "Publish supports TWB/TWBX",
+        )?;
+        Package::open(path, limits)?;
+        let source_hash = package::hash_file(path, limits.file_bytes)?;
+
+        let upload =
+            self.send_json(self.request(Method::POST, self.site_url(&["fileUploads"])?)?)?;
+        let session = upload
+            .pointer("/fileUpload/uploadSessionId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| Error::new("REST_SHAPE", "Upload session id is missing"))?
+            .to_owned();
+
+        let mut input = File::open(path)?;
+        let mut buffer = vec![0u8; 8 << 20];
+        let mut uploaded_hash = Sha256::new();
+        let mut total = 0u64;
+        let mut sequence_id = 0u64;
+        loop {
+            let mut count = 0usize;
+            while count < buffer.len() {
+                let read = input.read(&mut buffer[count..])?;
+                if read == 0 {
+                    break;
+                }
+                count += read;
+            }
+            if count == 0 {
+                break;
+            }
+            total += count as u64;
+            require(
+                total <= limits.file_bytes,
+                "LIMIT",
+                "Publish input exceeds configured limit",
+            )?;
+            uploaded_hash.update(&buffer[..count]);
+            let (body, content_type) = mixed("", Some(("tableau_file", "file", &buffer[..count])));
+            let mut append_url = self.site_url(&["fileUploads", &session])?;
+            append_url
+                .query_pairs_mut()
+                .append_pair("sequenceID", &sequence_id.to_string());
+            self.send_json(
+                self.request(Method::PUT, append_url)?
+                    .header(CONTENT_TYPE, content_type)
+                    .body(body),
+            )?;
+            sequence_id = sequence_id
+                .checked_add(1)
+                .ok_or_else(|| Error::new("LIMIT", "Upload sequence overflow"))?;
+        }
+
+        require(
+            format!("{:x}", uploaded_hash.finalize()) == source_hash
+                && package::hash_file(path, limits.file_bytes)? == source_hash,
+            "STALE_BASE",
+            "Workbook changed during upload",
+        )?;
+
+        let payload = format!(
+            "<tsRequest><workbook name=\"{}\"><project id=\"{}\" /></workbook></tsRequest>",
+            escape_attr(name),
+            escape_attr(project_id)
+        );
+        let (body, content_type) = mixed(&payload, None);
+        let mut url = self.site_url(&["workbooks"])?;
+        url.query_pairs_mut()
+            .append_pair("uploadSessionId", &session)
+            .append_pair("workbookType", file_type)
+            .append_pair("overwrite", if overwrite { "true" } else { "false" })
+            .append_pair("asJob", "true");
+
+        self.send_json(
+            self.request(Method::POST, url)?
+                .header(CONTENT_TYPE, content_type)
+                .body(body),
+        )
+    }
+
+    pub fn job(&self, job_id: &str) -> Result<Value> {
+        self.send_json(self.request(Method::GET, self.site_url(&["jobs", job_id])?)?)
+    }
+
+    pub fn sign_out(self) -> Result<()> {
+        let url = api_url(&self.config, None, &["auth", "signout"])?;
+        let token = HeaderValue::from_str(&self.token)
+            .map_err(|_| Error::new("AUTH", "Invalid Tableau session token"))?;
+        let response = self
+            .client
+            .post(url)
+            .header("X-Tableau-Auth", token)
+            .send()?;
+        require(
+            response.status().is_success(),
+            "REST_REJECTED",
+            format!("Sign-out returned HTTP {}", response.status().as_u16()),
+        )
+    }
+
+    fn site_url(&self, parts: &[&str]) -> Result<Url> {
+        api_url(&self.config, Some(&self.site_id), parts)
+    }
+
+    fn request(&self, method: Method, url: Url) -> Result<RequestBuilder> {
+        let mut token = HeaderValue::from_str(&self.token)
+            .map_err(|_| Error::new("AUTH", "Invalid Tableau session token"))?;
+        token.set_sensitive(true);
+        Ok(self
+            .client
+            .request(method, url)
+            .header("X-Tableau-Auth", token)
+            .header(ACCEPT, "application/json"))
+    }
+
+    fn send_json(&self, request: RequestBuilder) -> Result<Value> {
+        read_json(request.send()?)
+    }
+}
+
+fn workbook_infos(value: Value) -> Result<Vec<WorkbookInfo>> {
+    let Some(workbooks) = value.pointer("/workbooks/workbook") else {
+        return Ok(Vec::new());
+    };
+
+    let items: Vec<&Value> = match workbooks {
+        Value::Array(items) => items.iter().collect(),
+        Value::Object(_) => vec![workbooks],
+        _ => {
+            return Err(Error::new(
+                "REST_SHAPE",
+                "Tableau workbook list has an unexpected shape",
+            ));
+        }
+    };
+
+    let mut result = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| Error::new("REST_SHAPE", "Workbook result lacks id"))?;
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| Error::new("REST_SHAPE", "Workbook result lacks name"))?;
+
+        result.push(WorkbookInfo {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            content_url: item
+                .get("contentUrl")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            project_id: item
+                .pointer("/project/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            project_name: item
+                .pointer("/project/name")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            updated_at: item
+                .get("updatedAt")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            has_extracts: item.get("hasExtracts").and_then(|value| {
+                value
+                    .as_bool()
+                    .or_else(|| value.as_str().and_then(|text| text.parse::<bool>().ok()))
+            }),
+        });
+    }
+    Ok(result)
+}
+
+fn api_url(config: &Config, site_id: Option<&str>, parts: &[&str]) -> Result<Url> {
+    let mut url = Url::parse(&config.server)
+        .map_err(|_| Error::new("CONFIG", "Invalid Tableau server URL"))?;
+    {
+        let mut path = url
+            .path_segments_mut()
+            .map_err(|_| Error::new("CONFIG", "Invalid Tableau server base URL"))?;
+        path.pop_if_empty().push("api").push(&config.api_version);
+        if let Some(site_id) = site_id {
+            path.push("sites").push(site_id);
+        }
+        for part in parts {
+            path.push(part);
+        }
+    }
+    Ok(url)
+}
+
+fn read_json(mut response: Response) -> Result<Value> {
+    let status = response.status();
+    let value = read_json_body(&mut response)?;
+    require(
+        status.is_success(),
+        "REST_REJECTED",
+        format!("Tableau returned HTTP {}", status.as_u16()),
+    )?;
+    Ok(value)
+}
+
+fn read_json_any_status(mut response: Response) -> Result<Value> {
+    read_json_body(&mut response)
+}
+
+fn read_json_body(response: &mut Response) -> Result<Value> {
+    let mut data = Vec::new();
+    response.take(16 << 20).read_to_end(&mut data)?;
+    if data.is_empty() {
+        return Ok(json!({}));
+    }
+    serde_json::from_slice(&data)
+        .map_err(|_| Error::new("REST_SHAPE", "Expected a JSON Tableau response"))
+}
+
+fn mixed(payload: &str, file: Option<(&str, &str, &[u8])>) -> (Vec<u8>, String) {
+    let boundary = format!("tabkit-{}", uuid::Uuid::new_v4().simple());
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: name=\"request_payload\"\r\nContent-Type: text/xml\r\n\r\n{payload}\r\n"
+    )
+    .into_bytes();
+    if let Some((part, name, data)) = file {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: name=\"{part}\"; filename=\"{name}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(data);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (body, format!("multipart/mixed; boundary={boundary}"))
+}
+
+fn escape_attr(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            '"' => output.push_str("&quot;"),
+            '\'' => output.push_str("&apos;"),
+            _ => output.push(character),
+        }
+    }
+    output
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_query_workbooks_project_fields() -> Result<()> {
+        let items = workbook_infos(json!({
+            "workbooks": {
+                "workbook": [{
+                    "id": "wb-1",
+                    "name": "Sales",
+                    "contentUrl": "Sales",
+                    "updatedAt": "2026-11-17T10:00:00Z",
+                    "hasExtracts": "true",
+                    "project": {
+                        "id": "project-1",
+                        "name": "Reporting"
+                    }
+                }]
+            }
+        }))?;
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "wb-1");
+        assert_eq!(items[0].project_id.as_deref(), Some("project-1"));
+        assert_eq!(items[0].project_name.as_deref(), Some("Reporting"));
+        assert_eq!(items[0].has_extracts, Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_rest_3_29_and_rejects_3_30_for_2026_2_4_target() -> Result<()> {
+        let config = |api_version: &str| Config {
+            server: "https://tableau.example.test".into(),
+            site: String::new(),
+            api_version: api_version.into(),
+            pat_name: "test-pat".into(),
+            pat_secret_env: "TABLEAU_PAT_SECRET".into(),
+            timeout: Duration::from_secs(30),
+        };
+
+        config("3.29").validate()?;
+        let rejected = config("3.30")
+            .validate()
+            .expect_err("REST 3.30 must be rejected by the 2026.2.4 target gate");
+        assert_eq!(rejected.code, "CONFIG");
+        Ok(())
+    }
+}

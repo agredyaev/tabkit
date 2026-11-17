@@ -1,10 +1,29 @@
 [graph]
-# Check the supported release target and the local development target.
-targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
+targets = [
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+]
 all-features = true
 
+[advisories]
+# rmcp 3.11.0 currently brings chrono transitively. Treat unmaintained
+# transitive crates as non-blocking; vulnerabilities remain blocking.
+unmaintained = "workspace"
+
 [licenses]
-allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "CDLA-Permissive-2.0"]
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "CDLA-Permissive-2.0",
+  "Zlib",
+  "BSL-1.0",
+]
 
 [bans]
 multiple-versions = "warn"
