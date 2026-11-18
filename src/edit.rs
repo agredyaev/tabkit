@@ -4441,4 +4441,751 @@ mod tests {
             assert!(validate_web_extension_url(url).is_err(), "{url}");
         }
     }
+    fn assert_error_code<T>(result: Result<T>, expected: &'static str) {
+        match result {
+            Ok(_) => panic!("operation unexpectedly succeeded; expected {expected}"),
+            Err(error) => assert_eq!(error.code, expected, "{}", error.message),
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_parameter_literals_and_domains() {
+        for result in [
+            parameter_literal(DataType::String, &serde_json::json!(1)),
+            parameter_literal(DataType::String, &serde_json::json!("bad\"value")),
+            parameter_literal(DataType::String, &serde_json::json!("bad\nvalue")),
+            parameter_literal(DataType::Integer, &serde_json::json!(1.5)),
+            parameter_literal(DataType::Boolean, &serde_json::json!("true")),
+            parameter_literal(DataType::Date, &serde_json::json!("2026-11-18")),
+        ] {
+            assert_error_code(result, "PARAMETER");
+        }
+
+        assert_error_code(
+            parameter_domain_xml(
+                DataType::String,
+                &serde_json::json!("A"),
+                &ParameterDomain::List { values: vec![] },
+            ),
+            "PARAMETER",
+        );
+        assert_error_code(
+            parameter_domain_xml(
+                DataType::String,
+                &serde_json::json!("A"),
+                &ParameterDomain::List {
+                    values: vec![serde_json::json!("B")],
+                },
+            ),
+            "PARAMETER",
+        );
+        assert_error_code(
+            parameter_domain_xml(
+                DataType::String,
+                &serde_json::json!("A"),
+                &ParameterDomain::List {
+                    values: (0..1001)
+                        .map(|index| serde_json::json!(index.to_string()))
+                        .collect(),
+                },
+            ),
+            "PARAMETER",
+        );
+        assert_error_code(
+            parameter_domain_xml(
+                DataType::String,
+                &serde_json::json!("A"),
+                &ParameterDomain::Range {
+                    min: serde_json::json!(0),
+                    max: serde_json::json!(10),
+                    step: serde_json::json!(1),
+                },
+            ),
+            "PARAMETER",
+        );
+        for domain in [
+            ParameterDomain::Range {
+                min: serde_json::json!(10),
+                max: serde_json::json!(1),
+                step: serde_json::json!(1),
+            },
+            ParameterDomain::Range {
+                min: serde_json::json!(1),
+                max: serde_json::json!(10),
+                step: serde_json::json!(0),
+            },
+            ParameterDomain::Range {
+                min: serde_json::json!(1),
+                max: serde_json::json!(10),
+                step: serde_json::json!(1),
+            },
+        ] {
+            let current = match &domain {
+                ParameterDomain::Range { step, .. } if step == &serde_json::json!(0) => {
+                    serde_json::json!(5)
+                }
+                ParameterDomain::Range { min, .. } if min == &serde_json::json!(10) => {
+                    serde_json::json!(5)
+                }
+                _ => serde_json::json!(20),
+            };
+            assert_error_code(
+                parameter_domain_xml(DataType::Integer, &current, &domain),
+                "PARAMETER",
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_calculation_metadata() -> Result<()> {
+        let book = worksheet_authoring_workbook()?;
+        let base = || CalculationSpec {
+            datasource: "Orders".into(),
+            caption: "New Calc".into(),
+            formula: "[Sales]".into(),
+            datatype: DataType::Real,
+            role: Role::Measure,
+            field_type: FieldType::Quantitative,
+            name: Some("[New Calc]".into()),
+        };
+
+        let mut spec = base();
+        spec.caption = " ".into();
+        assert_error_code(validate_calculation_spec(&book, &spec), "CALCULATION");
+
+        spec = base();
+        spec.datatype = DataType::Unknown;
+        assert_error_code(validate_calculation_spec(&book, &spec), "CALCULATION");
+
+        spec = base();
+        spec.datasource = "Missing".into();
+        assert_error_code(
+            validate_calculation_spec(&book, &spec),
+            "DATASOURCE_NOT_FOUND",
+        );
+
+        spec = base();
+        spec.name = Some("not-bracketed".into());
+        assert_error_code(validate_calculation_spec(&book, &spec), "CALCULATION");
+
+        spec = base();
+        spec.caption = "Sales".into();
+        assert_error_code(
+            validate_calculation_spec(&book, &spec),
+            "CALCULATION_EXISTS",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_worksheet_shapes() -> Result<()> {
+        let book = worksheet_authoring_workbook()?;
+        let base = || WorksheetSpec {
+            name: "New Sheet".into(),
+            datasource: "Orders".into(),
+            kind: WorksheetKind::Bar,
+            dimension: Some("Region".into()),
+            secondary_dimension: None,
+            measure: "Sales".into(),
+            aggregation: Aggregation::Sum,
+        };
+
+        let mut spec = base();
+        spec.name = " ".into();
+        assert_error_code(worksheet_xml(&book, &spec), "WORKSHEET");
+
+        spec = base();
+        spec.name = "Seed".into();
+        assert_error_code(worksheet_xml(&book, &spec), "WORKSHEET_EXISTS");
+
+        spec = base();
+        spec.datasource = "Missing".into();
+        assert_error_code(worksheet_xml(&book, &spec), "DATASOURCE_NOT_FOUND");
+
+        spec = base();
+        spec.measure = "Region".into();
+        assert_error_code(worksheet_xml(&book, &spec), "WORKSHEET");
+
+        spec = base();
+        spec.dimension = None;
+        assert_error_code(worksheet_xml(&book, &spec), "WORKSHEET");
+
+        spec = base();
+        spec.secondary_dimension = Some("Category".into());
+        assert_error_code(worksheet_xml(&book, &spec), "WORKSHEET");
+
+        spec = base();
+        spec.kind = WorksheetKind::Line;
+        spec.dimension = Some("Region".into());
+        assert_error_code(worksheet_xml(&book, &spec), "WORKSHEET");
+
+        spec = base();
+        spec.kind = WorksheetKind::Line;
+        spec.dimension = None;
+        assert_error_code(worksheet_xml(&book, &spec), "WORKSHEET");
+
+        spec = base();
+        spec.kind = WorksheetKind::Kpi;
+        assert_error_code(worksheet_xml(&book, &spec), "WORKSHEET");
+
+        spec = base();
+        spec.kind = WorksheetKind::TextTable;
+        spec.dimension = None;
+        assert_error_code(worksheet_xml(&book, &spec), "WORKSHEET");
+
+        spec = base();
+        spec.measure = "Missing".into();
+        assert_error_code(worksheet_xml(&book, &spec), "FIELD_NOT_FOUND");
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_layout_and_style_bounds() -> Result<()> {
+        let book = dashboard_workbook()?;
+        assert_error_code(
+            validate_layout(
+                &book,
+                &Layout::Row {
+                    gap: 0,
+                    padding: 0,
+                    children: vec![],
+                },
+            ),
+            "LAYOUT",
+        );
+        assert_error_code(
+            validate_layout(
+                &book,
+                &Layout::Column {
+                    gap: 0,
+                    padding: 501,
+                    children: vec![Item {
+                        weight: 1,
+                        fixed_size: None,
+                        style: ZoneStyle::default(),
+                        layout: Layout::Spacer,
+                    }],
+                },
+            ),
+            "LAYOUT",
+        );
+        for item in [
+            Item {
+                weight: 0,
+                fixed_size: None,
+                style: ZoneStyle::default(),
+                layout: Layout::Spacer,
+            },
+            Item {
+                weight: 1,
+                fixed_size: Some(0),
+                style: ZoneStyle::default(),
+                layout: Layout::Spacer,
+            },
+        ] {
+            assert_error_code(
+                validate_layout(
+                    &book,
+                    &Layout::Row {
+                        gap: 0,
+                        padding: 0,
+                        children: vec![item],
+                    },
+                ),
+                "LAYOUT",
+            );
+        }
+        assert_error_code(
+            validate_layout(
+                &book,
+                &Layout::Sheet {
+                    sheet: "Missing".into(),
+                    show_title: None,
+                    fit: None,
+                },
+            ),
+            "WORKSHEET_NOT_FOUND",
+        );
+        assert_error_code(
+            validate_layout(
+                &book,
+                &Layout::Filter {
+                    source_sheet: "Trend".into(),
+                    field: " ".into(),
+                    instance: None,
+                    control: FilterControl::Auto,
+                    values: None,
+                    title: None,
+                },
+            ),
+            "FILTER",
+        );
+        for layout in [
+            Layout::Text {
+                text: " ".into(),
+                font_family: None,
+                font_size: None,
+                bold: false,
+                italic: false,
+                color: None,
+                align: None,
+            },
+            Layout::Text {
+                text: "x".into(),
+                font_family: Some(" ".into()),
+                font_size: None,
+                bold: false,
+                italic: false,
+                color: None,
+                align: None,
+            },
+            Layout::Text {
+                text: "x".into(),
+                font_family: None,
+                font_size: Some(5),
+                bold: false,
+                italic: false,
+                color: None,
+                align: None,
+            },
+            Layout::Text {
+                text: "x".into(),
+                font_family: None,
+                font_size: None,
+                bold: false,
+                italic: false,
+                color: Some("#XYZXYZ".into()),
+                align: None,
+            },
+        ] {
+            assert!(validate_layout(&book, &layout).is_err());
+        }
+
+        for style in [
+            ZoneStyle {
+                border_width: 21,
+                ..ZoneStyle::default()
+            },
+            ZoneStyle {
+                corner_radius: 101,
+                ..ZoneStyle::default()
+            },
+            ZoneStyle {
+                padding: 501,
+                ..ZoneStyle::default()
+            },
+            ZoneStyle {
+                margin: 501,
+                ..ZoneStyle::default()
+            },
+            ZoneStyle {
+                background: Some("red".into()),
+                ..ZoneStyle::default()
+            },
+        ] {
+            assert_error_code(validate_style(&style), "STYLE");
+        }
+
+        let base_style = || ViewStyleSpec {
+            sheet: "Trend".into(),
+            font_family: None,
+            font_size: None,
+            color: None,
+            axis: None,
+            grid_lines: None,
+            zero_line: None,
+            line_width: None,
+            show_labels: None,
+        };
+        let mut style = base_style();
+        style.sheet = "Missing".into();
+        assert_error_code(validate_view_style(&book, &style), "WORKSHEET_NOT_FOUND");
+
+        style = base_style();
+        style.font_size = Some(97);
+        assert_error_code(validate_view_style(&book, &style), "STYLE");
+
+        style = base_style();
+        style.axis = Some(LineStyle {
+            visible: true,
+            color: None,
+            width: Some(11),
+        });
+        assert_error_code(validate_view_style(&book, &style), "STYLE");
+
+        for width in [-0.1, 4.1, f32::NAN] {
+            style = base_style();
+            style.line_width = Some(width);
+            assert_error_code(validate_view_style(&book, &style), "STYLE");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_dashboard_and_web_dashboard_contracts() -> Result<()> {
+        let book = dashboard_workbook()?;
+        let layout = || Layout::Sheet {
+            sheet: "Trend".into(),
+            show_title: None,
+            fit: None,
+        };
+        let base = || DashboardSpec {
+            name: "New Dashboard".into(),
+            width: 1200,
+            height: 800,
+            padding: 0,
+            background: None,
+            view_styles: vec![],
+            layout: layout(),
+        };
+
+        for mut spec in {
+            let mut blank = base();
+            blank.name = " ".into();
+            let mut zero_width = base();
+            zero_width.width = 0;
+            let mut zero_height = base();
+            zero_height.height = 0;
+            vec![blank, zero_width, zero_height]
+        } {
+            let mut next_id = 10;
+            let mut indexes = HashMap::new();
+            assert_error_code(
+                dashboard_parts(&book, &spec, &mut next_id, &mut indexes),
+                "DASHBOARD",
+            );
+            spec.padding = 0;
+        }
+
+        let mut padded = base();
+        padded.width = 100;
+        padded.height = 100;
+        padded.padding = 100;
+        let mut next_id = 10;
+        let mut indexes = HashMap::new();
+        assert_error_code(
+            dashboard_parts(&book, &padded, &mut next_id, &mut indexes),
+            "LAYOUT",
+        );
+
+        let local_url = "http://127.0.0.1:8765/host.html";
+        let web_base = || WebDashboardSpec {
+            name: "Web".into(),
+            width: 1200,
+            height: 800,
+            extension_url: local_url.into(),
+            html: "<main/>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        };
+        let mut spec = web_base();
+        spec.name = " ".into();
+        let mut next_id = 10;
+        assert_error_code(
+            web_dashboard_parts(&book, &spec, &mut next_id),
+            "WEB_DASHBOARD",
+        );
+
+        spec = web_base();
+        spec.width = 0;
+        let mut next_id = 10;
+        assert_error_code(
+            web_dashboard_parts(&book, &spec, &mut next_id),
+            "WEB_DASHBOARD",
+        );
+
+        spec = web_base();
+        spec.html.clear();
+        spec.javascript.clear();
+        let mut next_id = 10;
+        assert_error_code(
+            web_dashboard_parts(&book, &spec, &mut next_id),
+            "WEB_DASHBOARD",
+        );
+
+        spec = web_base();
+        spec.html = "x".repeat(WEB_DASHBOARD_MAX_INLINE_BYTES + 1);
+        let mut next_id = 10;
+        assert_error_code(
+            web_dashboard_parts(&book, &spec, &mut next_id),
+            "WEB_DASHBOARD",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_action_sources_and_targets() -> Result<()> {
+        let base = dashboard_workbook()?;
+        let dashboard = DashboardSpec {
+            name: "Actions".into(),
+            width: 1200,
+            height: 800,
+            padding: 0,
+            background: None,
+            view_styles: vec![],
+            layout: Layout::Sheet {
+                sheet: "Trend".into(),
+                show_title: None,
+                fit: None,
+            },
+        };
+        let candidate = apply(
+            &base,
+            &Batch {
+                edits: vec![Edit::CreateDashboard(dashboard)],
+            },
+            8 << 20,
+        )?;
+        let book = &candidate.workbook;
+
+        for spec in [
+            FilterActionSpec {
+                caption: " ".into(),
+                dashboard: "Actions".into(),
+                source_sheet: "Trend".into(),
+                run_on: ActionTrigger::Select,
+                auto_clear: true,
+            },
+            FilterActionSpec {
+                caption: "Filter".into(),
+                dashboard: "Missing".into(),
+                source_sheet: "Trend".into(),
+                run_on: ActionTrigger::Select,
+                auto_clear: true,
+            },
+            FilterActionSpec {
+                caption: "Filter".into(),
+                dashboard: "Actions".into(),
+                source_sheet: "Missing".into(),
+                run_on: ActionTrigger::Select,
+                auto_clear: true,
+            },
+            FilterActionSpec {
+                caption: "Filter".into(),
+                dashboard: "Actions".into(),
+                source_sheet: "Region".into(),
+                run_on: ActionTrigger::Select,
+                auto_clear: true,
+            },
+        ] {
+            assert!(filter_action_xml(book, &spec).is_err());
+        }
+
+        let missing_parameter = ParameterActionSpec {
+            caption: "Parameter".into(),
+            dashboard: "Actions".into(),
+            source_sheet: "Trend".into(),
+            source_field: "Sales".into(),
+            source_instance: None,
+            target_parameter: "Missing".into(),
+            run_on: ActionTrigger::Select,
+        };
+        assert_error_code(
+            parameter_action_xml(book, &missing_parameter),
+            "PARAMETER_NOT_FOUND",
+        );
+
+        let missing_field = ParameterActionSpec {
+            source_field: "Missing".into(),
+            ..missing_parameter
+        };
+        assert_error_code(
+            parameter_action_xml(book, &missing_field),
+            "ACTION_SOURCE_FIELD",
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn existing_web_extension_reference_is_reused_and_conflicts_are_rejected() -> Result<()> {
+        let book = Workbook::open(
+            br#"<workbook version="26.2" source-build="20262.test">
+  <referenced-extensions>
+    <referenced-extension>
+      <manifest manifest-version="0.1">
+        <dashboard-extension extension-version="0.1.0" id="io.tabkit.web-dashboard">
+          <source-location><url>http://127.0.0.1:8765/host.html</url></source-location>
+        </dashboard-extension>
+      </manifest>
+      <referenced-views><referenced-view instances="1" viewId="Existing"/></referenced-views>
+    </referenced-extension>
+  </referenced-extensions>
+</workbook>"#
+                .to_vec(),
+        )?;
+        let matching = WebDashboardSpec {
+            name: "New & View".into(),
+            width: 1280,
+            height: 720,
+            extension_url: "http://127.0.0.1:8765/host.html".into(),
+            html: "<main/>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        };
+        let patch = web_extension_reference_patch(&book, &[&matching])?;
+        assert!(patch.replacement.contains("viewId=\"New &amp; View\""));
+        assert!(!patch.replacement.contains("<manifest"));
+        assert!(!patch.replacement.contains("<referenced-extension>"));
+
+        let conflict = WebDashboardSpec {
+            extension_url: "http://127.0.0.1:9999/host.html".into(),
+            ..matching.clone()
+        };
+        let error = match web_extension_reference_patch(&book, &[&conflict]) {
+            Ok(_) => return Err(Error::new("TEST", "conflicting extension URL was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "WEB_DASHBOARD");
+        Ok(())
+    }
+
+    #[test]
+    fn existing_web_extension_without_referenced_views_gets_views_container() -> Result<()> {
+        let book = Workbook::open(
+            br#"<workbook version="26.2" source-build="20262.test">
+  <referenced-extensions>
+    <referenced-extension>
+      <manifest manifest-version="0.1">
+        <dashboard-extension extension-version="0.1.0" id="io.tabkit.web-dashboard">
+          <source-location><url>http://127.0.0.1:8765/host.html</url></source-location>
+        </dashboard-extension>
+      </manifest>
+    </referenced-extension>
+  </referenced-extensions>
+</workbook>"#
+                .to_vec(),
+        )?;
+        let spec = WebDashboardSpec {
+            name: "Web".into(),
+            width: 1280,
+            height: 720,
+            extension_url: "http://127.0.0.1:8765/host.html".into(),
+            html: "<main/>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        };
+        let patch = web_extension_reference_patch(&book, &[&spec])?;
+        assert_eq!(
+            patch.replacement,
+            "<referenced-views><referenced-view instances=\"1\" viewId=\"Web\"/></referenced-views>"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn web_dashboard_escapes_name_and_extension_url_in_xml() -> Result<()> {
+        let book = Workbook::open(
+            br#"<workbook version="26.2" source-build="20262.test"></workbook>"#.to_vec(),
+        )?;
+        let spec = WebDashboardSpec {
+            name: "A&B\"<View>".into(),
+            width: 1280,
+            height: 720,
+            extension_url: "http://127.0.0.1:8765/host.html?a=1&b=2".into(),
+            html: "<main/>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        };
+        let mut next_id = 10;
+        let parts = web_dashboard_parts(&book, &spec, &mut next_id)?;
+        assert!(
+            parts
+                .dashboard
+                .contains("name=\"A&amp;B&quot;&lt;View&gt;\"")
+        );
+        assert!(
+            parts
+                .dashboard
+                .contains("extension-url=\"http://127.0.0.1:8765/host.html?a=1&amp;b=2\"")
+        );
+        let reference = web_extension_reference_patch(&book, &[&spec])?;
+        assert!(
+            reference
+                .replacement
+                .contains("<url>http://127.0.0.1:8765/host.html?a=1&amp;b=2</url>")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dashboard_zone_id_allocation_rejects_overflow() -> Result<()> {
+        let book = Workbook::open(
+            br#"<workbook version="26.2" source-build="20262.test">
+  <dashboards>
+    <dashboard name="Overflow">
+      <zones><zone id="4294967295"/></zones>
+      <simple-id uuid="{00000000-0000-0000-0000-000000000401}"/>
+    </dashboard>
+  </dashboards>
+</workbook>"#
+                .to_vec(),
+        )?;
+        let error = match next_dashboard_zone_id(&book) {
+            Ok(_) => return Err(Error::new("TEST", "zone id overflow was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "LAYOUT");
+
+        let mut next_id = u32::MAX;
+        let error = match take_id(&mut next_id) {
+            Ok(_) => return Err(Error::new("TEST", "free zone id overflow was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "LAYOUT");
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_empty_and_duplicate_edit_batches() -> Result<()> {
+        let book = worksheet_authoring_workbook()?;
+        assert_error_code(
+            apply(&book, &Batch { edits: vec![] }, 8 << 20),
+            "EMPTY_BATCH",
+        );
+
+        let parameter = ParameterSpec {
+            caption: "Mode".into(),
+            datatype: DataType::String,
+            value: serde_json::json!("A"),
+            domain: ParameterDomain::Any,
+            name: Some("[Mode]".into()),
+        };
+        assert_error_code(
+            apply(
+                &book,
+                &Batch {
+                    edits: vec![
+                        Edit::CreateParameter(parameter.clone()),
+                        Edit::CreateParameter(parameter),
+                    ],
+                },
+                8 << 20,
+            ),
+            "DUPLICATE_EDIT",
+        );
+
+        let worksheet = WorksheetSpec {
+            name: "Duplicate".into(),
+            datasource: "Orders".into(),
+            kind: WorksheetKind::Kpi,
+            dimension: None,
+            secondary_dimension: None,
+            measure: "Sales".into(),
+            aggregation: Aggregation::Sum,
+        };
+        assert_error_code(
+            apply(
+                &book,
+                &Batch {
+                    edits: vec![
+                        Edit::CreateWorksheet(worksheet.clone()),
+                        Edit::CreateWorksheet(worksheet),
+                    ],
+                },
+                8 << 20,
+            ),
+            "DUPLICATE_EDIT",
+        );
+        Ok(())
+    }
 }

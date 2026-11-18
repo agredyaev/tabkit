@@ -233,6 +233,303 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn verify_enforces_payload_encoding_size_and_unsigned_policy() {
+        let signed = HostState {
+            signing_key: Some(Arc::new(vec![7_u8; 32])),
+            unsigned_localhost: false,
+        };
+        let malformed = verify(
+            State(signed.clone()),
+            Json(VerifyRequest {
+                bundle_b64: "%%%".into(),
+                mac: String::new(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+
+        let encoded_too_large = verify(
+            State(signed.clone()),
+            Json(VerifyRequest {
+                bundle_b64: "A".repeat(MAX_VERIFY_BODY_BYTES + 1),
+                mac: String::new(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(encoded_too_large.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        let decoded_too_large = verify(
+            State(signed),
+            Json(VerifyRequest {
+                bundle_b64: BASE64.encode(vec![0_u8; MAX_BUNDLE_BYTES + 1]),
+                mac: String::new(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(decoded_too_large.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        let bundle = BASE64.encode(br#"{"runtime_version":1}"#);
+        let unsigned_allowed = verify(
+            State(HostState {
+                signing_key: None,
+                unsigned_localhost: true,
+            }),
+            Json(VerifyRequest {
+                bundle_b64: bundle.clone(),
+                mac: String::new(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(unsigned_allowed.status(), StatusCode::NO_CONTENT);
+
+        let unsigned_with_mac = verify(
+            State(HostState {
+                signing_key: None,
+                unsigned_localhost: true,
+            }),
+            Json(VerifyRequest {
+                bundle_b64: bundle.clone(),
+                mac: "unexpected".into(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(unsigned_with_mac.status(), StatusCode::UNAUTHORIZED);
+
+        let unsigned_disabled = verify(
+            State(HostState {
+                signing_key: None,
+                unsigned_localhost: false,
+            }),
+            Json(VerifyRequest {
+                bundle_b64: bundle,
+                mac: String::new(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(unsigned_disabled.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn base_path_rejects_query_fragment_and_dot_segments() -> tabkit::Result<()> {
+        for value in [
+            "tabkit",
+            "/tabkit/",
+            "/a/../b",
+            "/a/./b",
+            "/tabkit?x=1",
+            "/tabkit#fragment",
+        ] {
+            let error = match normalize_base_path(value) {
+                Ok(_) => {
+                    return Err(Error::new(
+                        "TEST",
+                        format!("invalid base path accepted: {value:?}"),
+                    ));
+                }
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "CONFIG", "{value:?}");
+        }
+        assert_eq!(normalize_base_path(" /tabkit ")?, "/tabkit");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn router_enforces_security_headers_content_types_and_base_path() -> tabkit::Result<()> {
+        use axum::{body::to_bytes, http::Request};
+        use tower::ServiceExt;
+
+        let app = host_router(
+            HostState {
+                signing_key: None,
+                unsigned_localhost: true,
+            },
+            "/tabkit",
+        );
+
+        let outside = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .map_err(|error| Error::new("TEST", error.to_string()))?,
+            )
+            .await
+            .map_err(|never| -> Error { match never {} })?;
+        assert_eq!(outside.status(), StatusCode::NOT_FOUND);
+
+        for (path, content_type, expect_csp) in [
+            ("/tabkit/host.html", "text/html; charset=utf-8", true),
+            ("/tabkit/host.css", "text/css; charset=utf-8", false),
+            ("/tabkit/host.js", "text/javascript; charset=utf-8", false),
+            (
+                "/tabkit/vendor/tableau.extensions.1.17.0.min.js",
+                "text/javascript; charset=utf-8",
+                false,
+            ),
+            ("/tabkit/healthz", "text/plain; charset=utf-8", false),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .map_err(|error| Error::new("TEST", error.to_string()))?,
+                )
+                .await
+                .map_err(|never| -> Error { match never {} })?;
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok()),
+                Some(content_type),
+                "{path}"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::X_CONTENT_TYPE_OPTIONS)
+                    .and_then(|value| value.to_str().ok()),
+                Some("nosniff"),
+                "{path}"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::REFERRER_POLICY)
+                    .and_then(|value| value.to_str().ok()),
+                Some("no-referrer"),
+                "{path}"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::CACHE_CONTROL)
+                    .and_then(|value| value.to_str().ok()),
+                Some("no-store"),
+                "{path}"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .contains_key(header::CONTENT_SECURITY_POLICY),
+                expect_csp,
+                "{path}"
+            );
+        }
+
+        let missing = app
+            .oneshot(
+                Request::builder()
+                    .uri("/tabkit/missing")
+                    .body(Body::empty())
+                    .map_err(|error| Error::new("TEST", error.to_string()))?,
+            )
+            .await
+            .map_err(|never| -> Error { match never {} })?;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(missing.into_body(), 1024)
+            .await
+            .map_err(|error| Error::new("TEST", error.to_string()))?;
+        assert!(body.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn router_rejects_malformed_verify_requests_and_wrong_method() -> tabkit::Result<()> {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = host_router(
+            HostState {
+                signing_key: None,
+                unsigned_localhost: true,
+            },
+            "",
+        );
+
+        let malformed = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/verify")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{"))
+                    .map_err(|error| Error::new("TEST", error.to_string()))?,
+            )
+            .await
+            .map_err(|never| -> Error { match never {} })?;
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+
+        let missing_content_type = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/verify")
+                    .body(Body::from(r#"{"bundle_b64":"","mac":""}"#))
+                    .map_err(|error| Error::new("TEST", error.to_string()))?,
+            )
+            .await
+            .map_err(|never| -> Error { match never {} })?;
+        assert_eq!(
+            missing_content_type.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+
+        let wrong_method = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/verify")
+                    .body(Body::empty())
+                    .map_err(|error| Error::new("TEST", error.to_string()))?,
+            )
+            .await
+            .map_err(|never| -> Error { match never {} })?;
+        assert_eq!(wrong_method.status(), StatusCode::METHOD_NOT_ALLOWED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn router_rejects_oversized_verify_http_body_before_handler() -> tabkit::Result<()> {
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let app = host_router(
+            HostState {
+                signing_key: None,
+                unsigned_localhost: true,
+            },
+            "",
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/verify")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("x".repeat(MAX_VERIFY_BODY_BYTES + 1024)))
+                    .map_err(|error| Error::new("TEST", error.to_string()))?,
+            )
+            .await
+            .map_err(|never| -> Error { match never {} })?;
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn router_serves_assets_and_verifies_signed_bundle() -> tabkit::Result<()> {
         use axum::{body::to_bytes, http::Request};
         use tabkit::extension_security::sign_bundle;

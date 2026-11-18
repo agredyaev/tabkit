@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Correctness
+
+- reject numeric XML character references outside XML 1.0 character ranges;
+- reject Tableau Server URLs containing credentials, query parameters, or fragments.
+
+### Tests
+
+- add negative-contract coverage for authoring, MCP sessions and arguments, TWB/TWBX admission, REST parsing and pre-network validation, workbook inspection, CLI wiring, and extension-host HTTP boundaries;
+- add process guards for MCP HTTP authentication, Tableau configuration, extension-host signing keys, and non-loopback unsigned hosting;
+- enforce 82% runtime line coverage in CI; the gate excludes only the manually invoked performance harness.
+
 ## 0.9.1 - 2026-11-18
 
 ### MCP

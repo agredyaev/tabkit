@@ -1051,6 +1051,37 @@ mod version_tests {
     }
 
     #[test]
+    fn rejects_wrong_root_missing_version_and_field_without_name() {
+        let wrong_root = match Workbook::open(br#"<not-workbook version="26.2"/>"#.to_vec()) {
+            Ok(_) => panic!("non-workbook root was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(wrong_root.code, "FORMAT");
+
+        let missing_version = match Workbook::open(br#"<workbook/>"#.to_vec()) {
+            Ok(_) => panic!("missing workbook version was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(missing_version.code, "VERSION");
+
+        let missing_field_name = match Workbook::open(
+            br#"<workbook version="26.2">
+  <datasources>
+    <datasource name="Orders">
+      <column datatype="real" role="measure" type="quantitative"/>
+    </datasource>
+  </datasources>
+</workbook>"#
+                .to_vec(),
+        ) {
+            Ok(_) => panic!("column without name was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(missing_field_name.code, "WORKBOOK_SHAPE");
+        assert!(missing_field_name.message.contains("<column> lacks name"));
+    }
+
+    #[test]
     fn blank_template_has_zero_semantic_objects_and_required_root_shape() -> Result<()> {
         let book = Workbook::open(BLANK_TWB_26_2.to_vec())?;
         let summary = book.summary();
@@ -1123,6 +1154,85 @@ mod inspect_tests {
         assert_eq!(exact["count"], 2);
         assert_eq!(exact["items"][0]["caption"], "Sales");
         assert_eq!(exact["items"][1]["caption"], "Sales");
+        Ok(())
+    }
+
+    #[test]
+    fn inspect_enforces_kind_limit_and_truncation_contract() -> Result<()> {
+        let book = Workbook::open(
+            br#"<workbook version="26.2" source-build="20262.test">
+  <datasources>
+    <datasource caption="Orders Caption" inline="true" name="Orders" version="26.2">
+      <connection class="sqlserver" name="sqlserver.1">
+        <relation connection="sqlserver.1" name="Orders SQL" type="text">SELECT * FROM dbo.orders</relation>
+      </connection>
+      <column caption="Sales" datatype="real" name="[Sales]" role="measure" type="quantitative"/>
+      <column caption="Profit" datatype="real" name="[Profit]" role="measure" type="quantitative"/>
+    </datasource>
+    <datasource inline="true" name="Parameters" version="26.2">
+      <column caption="Threshold" datatype="integer" name="[Parameter 1]" param-domain-type="any" role="measure" type="quantitative" value="10"/>
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name="Sales Sheet">
+      <table><view><datasource-dependencies datasource="Orders">
+        <column datatype="real" name="[Sales]" role="measure" type="quantitative"/>
+      </datasource-dependencies></view></table>
+      <simple-id uuid="{00000000-0000-0000-0000-000000000301}"/>
+    </worksheet>
+  </worksheets>
+  <dashboards>
+    <dashboard name="Executive">
+      <style/>
+      <size maxheight="900" maxwidth="1440" minheight="900" minwidth="1440" sizing-mode="fixed"/>
+      <zones/>
+      <simple-id uuid="{00000000-0000-0000-0000-000000000302}"/>
+    </dashboard>
+  </dashboards>
+</workbook>"#
+                .to_vec(),
+        )?;
+
+        let error = match inspect_limited(&book, "field", None, 0) {
+            Ok(_) => return Err(Error::new("TEST", "zero inspect limit was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "ARGUMENT");
+
+        let error = match inspect_limited(&book, "bogus", None, 10) {
+            Ok(_) => return Err(Error::new("TEST", "unknown inspect kind was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "ARGUMENT");
+
+        let fields = inspect_limited(&book, "field", None, 1)?;
+        assert_eq!(fields["count"], 1);
+        assert_eq!(fields["total"], 3);
+        assert_eq!(fields["truncated"], true);
+
+        for kind in [
+            "datasource",
+            "connection",
+            "relation",
+            "field",
+            "parameter",
+            "worksheet",
+            "dashboard",
+        ] {
+            let result = inspect_limited(&book, kind, None, 10)?;
+            assert!(
+                result["total"].as_u64().unwrap_or(0) > 0,
+                "{kind} inspect returned no objects: {result}"
+            );
+        }
+
+        let exact = inspect_limited(&book, "datasource", Some("ORDERS CAPTION"), 10)?;
+        assert_eq!(exact["total"], 1);
+        assert_eq!(exact["items"][0]["name"], "Orders");
+
+        let partial = inspect_limited(&book, "worksheet", Some("sales"), 10)?;
+        assert_eq!(partial["total"], 1);
+        assert_eq!(partial["items"][0]["name"], "Sales Sheet");
         Ok(())
     }
 

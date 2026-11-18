@@ -61,3 +61,46 @@ fn mix_u64(mut value: u64) -> u64 {
 
 pub(crate) type FastHashMap<K, V> = HashMap<K, V, BuildHasherDefault<FastIntHasher>>;
 pub(crate) type FastHashSet<K> = HashSet<K, BuildHasherDefault<FastIntHasher>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::hash::Hasher;
+
+    #[test]
+    fn ascii_hash_is_case_insensitive_and_contains_handles_ascii_and_unicode() {
+        assert_eq!(ascii_case_hash("Sales"), ascii_case_hash("sAlEs"));
+        assert_ne!(ascii_case_hash("Sales"), ascii_case_hash("Profit"));
+
+        assert!(contains_case_insensitive("Executive Sales", "SALES"));
+        assert!(contains_case_insensitive("anything", ""));
+        assert!(!contains_case_insensitive("Sales", "Profit"));
+
+        assert!(contains_case_insensitive("Málaga", "MÁLAGA"));
+        assert!(contains_case_insensitive("Straße", "straße"));
+        assert!(!contains_case_insensitive("Málaga", "Malaga"));
+    }
+
+    #[test]
+    fn fast_hasher_specialized_integer_paths_are_deterministic_and_distinct() {
+        let mut first = FastIntHasher::default();
+        first.write_u32(42);
+        let first_hash = first.finish();
+
+        let mut second = FastIntHasher::default();
+        second.write_u32(42);
+        assert_eq!(first_hash, second.finish());
+
+        let mut other = FastIntHasher::default();
+        other.write_u32(43);
+        assert_ne!(first_hash, other.finish());
+
+        let mut wide = FastIntHasher::default();
+        wide.write_u64(u64::MAX);
+        assert_ne!(first_hash, wide.finish());
+
+        let mut bytes = FastIntHasher::default();
+        bytes.write(b"tabkit");
+        assert_ne!(bytes.finish(), 0);
+    }
+}

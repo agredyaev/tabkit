@@ -587,6 +587,113 @@ mod tests {
     }
 
     #[test]
+    fn safe_entry_accepts_normal_files_and_directory_markers() -> Result<()> {
+        for name in [
+            "book.twb",
+            "Data/",
+            "Data/extract.hyper",
+            "nested/path/file.txt",
+        ] {
+            safe_entry(name)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_unsafe_entry_path_matrix_and_unsupported_format() -> Result<()> {
+        for name in [
+            "",
+            "/book.twb",
+            "../book.twb",
+            "./book.twb",
+            "a//book.twb",
+            "a/../book.twb",
+            "a\\book.twb",
+            "C:book.twb",
+            "a\0book.twb",
+        ] {
+            let error = match safe_entry(name) {
+                Ok(()) => {
+                    return Err(Error::new(
+                        "TEST",
+                        format!("unsafe ZIP path accepted: {name:?}"),
+                    ));
+                }
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "ZIP_PATH", "{name:?}");
+        }
+        for name in ["book.twb", "Data/resource.bin", "a/b/c.txt"] {
+            safe_entry(name)?;
+        }
+
+        let dir = tempfile::tempdir()?;
+        let unsupported = dir.path().join("book.txt");
+        std::fs::write(&unsupported, b"x")?;
+        assert_eq!(open_error(&unsupported, &Limits::default()).code, "FORMAT");
+        Ok(())
+    }
+
+    #[test]
+    fn twbx_admission_enforces_entry_expanded_and_embedded_xml_limits() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let twb = br#"<workbook version="26.2"></workbook>"#;
+
+        let entries_path = dir.path().join("entries.twbx");
+        write_twbx(&entries_path, &[("book.twb", twb), ("Data/x", b"x")])?;
+        let entry_limits = Limits {
+            zip_entries: 1,
+            ..Limits::default()
+        };
+        assert_eq!(open_error(&entries_path, &entry_limits).code, "ZIP_LIMIT");
+
+        let expanded_path = dir.path().join("expanded.twbx");
+        write_twbx(
+            &expanded_path,
+            &[("book.twb", twb), ("Data/blob.bin", &[7_u8; 128])],
+        )?;
+        let expanded_limits = Limits {
+            zip_expanded_bytes: twb.len() as u64 + 64,
+            ..Limits::default()
+        };
+        assert_eq!(
+            open_error(&expanded_path, &expanded_limits).code,
+            "ZIP_LIMIT"
+        );
+
+        let xml_path = dir.path().join("xml-limit.twbx");
+        write_twbx(&xml_path, &[("book.twb", twb)])?;
+        let xml_limits = Limits {
+            xml_bytes: 8,
+            ..Limits::default()
+        };
+        assert_eq!(open_error(&xml_path, &xml_limits).code, "LIMIT");
+        Ok(())
+    }
+
+    #[test]
+    fn twbx_rejects_symlink_entries() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("symlink.twbx");
+        let file = File::create(&path)?;
+        let mut zip = ZipWriter::new(file);
+        let file_options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("book.twb", file_options)?;
+        zip.write_all(br#"<workbook version="26.2"></workbook>"#)?;
+        let symlink_options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .system(zip::System::Unix)
+            .external_attributes((0o120777_u32) << 16);
+        zip.start_file("Data/link", symlink_options)?;
+        zip.write_all(b"target")?;
+        zip.finish()?;
+
+        assert_eq!(open_error(&path, &Limits::default()).code, "ZIP_SYMLINK");
+        Ok(())
+    }
+
+    #[test]
     fn twb_admission_enforces_file_and_xml_limits() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let input = dir.path().join("input.twb");

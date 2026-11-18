@@ -956,6 +956,13 @@ mod tests {
             .expect("unauthorized response");
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
 
+        let wrong_token = router
+            .clone()
+            .oneshot(request(initialize.clone(), None, Some("wrong")))
+            .await
+            .expect("wrong-token response");
+        assert_eq!(wrong_token.status(), StatusCode::UNAUTHORIZED);
+
         let response = router
             .clone()
             .oneshot(request(initialize, None, Some("secret")))
@@ -1107,6 +1114,258 @@ mod tests {
             .expect("close text");
         let closed: Value = serde_json::from_str(close_text).expect("close JSON");
         assert_eq!(closed["closed"], true);
+    }
+
+    #[test]
+    fn open_argument_contract_and_local_path_policy_are_enforced() -> TapResult<()> {
+        let server = TabKitMcp::new(None, false)?;
+
+        for args in [
+            OpenWorkbookArgs {
+                workbook_id: None,
+                path: None,
+                include_extract: None,
+            },
+            OpenWorkbookArgs {
+                workbook_id: Some("wb-1".into()),
+                path: Some("/tmp/book.twb".into()),
+                include_extract: None,
+            },
+        ] {
+            let error = match server.open_workbook(args) {
+                Ok(_) => {
+                    return Err(Error::new(
+                        "TEST",
+                        "invalid open argument combination accepted",
+                    ));
+                }
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "ARGUMENT");
+        }
+
+        let error = match server.open_workbook(OpenWorkbookArgs {
+            workbook_id: None,
+            path: Some("/tmp/book.twb".into()),
+            include_extract: None,
+        }) {
+            Ok(_) => return Err(Error::new("TEST", "local path accepted while disabled")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "LOCAL_PATHS_DISABLED");
+
+        let error = match server.session("wb_missing") {
+            Ok(_) => return Err(Error::new("TEST", "missing handle resolved")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "HANDLE_NOT_FOUND");
+        Ok(())
+    }
+
+    #[test]
+    fn create_close_lifecycle_releases_owned_file_and_is_idempotent() -> TapResult<()> {
+        let server = TabKitMcp::new(None, false)?;
+        let created = server.create_workbook()?;
+        let handle = created
+            .get("handle")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::new("TEST", "created workbook lacks handle"))?
+            .to_owned();
+        let path = server.session(&handle)?.path.clone();
+        assert!(path.exists());
+
+        let closed = server.close_workbook(&handle)?;
+        assert_eq!(closed["closed"], true);
+        assert!(!path.exists());
+
+        let closed_again = server.close_workbook(&handle)?;
+        assert_eq!(closed_again["closed"], false);
+        assert_eq!(server.state.session_slots.load(Ordering::Acquire), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn tableau_tools_fail_explicitly_when_not_configured() -> TapResult<()> {
+        let server = TabKitMcp::new(None, false)?;
+        let error = match server.with_rest(|_| Ok(())) {
+            Ok(()) => return Err(Error::new("TEST", "Tableau REST unexpectedly configured")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "TABLEAU_NOT_CONFIGURED");
+        Ok(())
+    }
+
+    fn mcp_fixture(server: &TabKitMcp) -> TapResult<String> {
+        let path = server.state.workspace.path().join("mcp-fixture.twb");
+        std::fs::write(
+            &path,
+            br#"<workbook version="26.2" source-build="20262.test">
+  <datasources>
+    <datasource inline="true" name="Orders" version="26.2">
+      <column caption="Sales" datatype="real" name="[Sales]" role="measure" type="quantitative"/>
+    </datasource>
+    <datasource inline="true" name="Forecast" version="26.2">
+      <column caption="Sales" datatype="real" name="[Sales]" role="measure" type="quantitative"/>
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name="Sales Sheet">
+      <table><view><datasource-dependencies datasource="Orders">
+        <column datatype="real" name="[Sales]" role="measure" type="quantitative"/>
+      </datasource-dependencies></view></table>
+      <simple-id uuid="{00000000-0000-0000-0000-000000000201}"/>
+    </worksheet>
+  </worksheets>
+</workbook>"#,
+        )?;
+        let opened = server.insert_path(path, true)?;
+        opened
+            .get("handle")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| Error::new("TEST", "fixture handle missing"))
+    }
+
+    #[test]
+    fn inspect_and_lineage_tool_contracts_reject_invalid_arguments() -> TapResult<()> {
+        let server = TabKitMcp::new(None, false)?;
+        let handle = mcp_fixture(&server)?;
+
+        for limit in [0, 501] {
+            let error = server
+                .workbook_inspect(Parameters(InspectArgs {
+                    handle: handle.clone(),
+                    kind: "field".into(),
+                    query: None,
+                    limit: Some(limit),
+                }))
+                .expect_err("invalid inspect limit must fail");
+            assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        }
+
+        let unknown_kind = server
+            .workbook_inspect(Parameters(InspectArgs {
+                handle: handle.clone(),
+                kind: "bogus".into(),
+                query: None,
+                limit: Some(10),
+            }))
+            .expect_err("unknown inspect kind must fail");
+        assert_eq!(unknown_kind.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+
+        let ambiguous = server
+            .workbook_lineage(Parameters(LineageArgs {
+                handle: handle.clone(),
+                query: "Sales".into(),
+                kind: Some("field".into()),
+                direction: None,
+                limit: None,
+            }))
+            .expect_err("ambiguous lineage query must fail");
+        assert_eq!(ambiguous.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(ambiguous.message.contains("ambiguous"));
+
+        let missing = server
+            .workbook_lineage(Parameters(LineageArgs {
+                handle: handle.clone(),
+                query: "Missing".into(),
+                kind: None,
+                direction: None,
+                limit: None,
+            }))
+            .expect_err("missing lineage query must fail");
+        assert_eq!(missing.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(missing.message.contains("No lineage object"));
+
+        let error = server
+            .workbook_lineage(Parameters(LineageArgs {
+                handle: handle.clone(),
+                query: "Sales Sheet".into(),
+                kind: Some("worksheet".into()),
+                direction: Some("sideways".into()),
+                limit: Some(10),
+            }))
+            .expect_err("invalid lineage direction must fail");
+        assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+
+        for limit in [0, 1001] {
+            let error = server
+                .workbook_lineage(Parameters(LineageArgs {
+                    handle: handle.clone(),
+                    query: "Sales Sheet".into(),
+                    kind: Some("worksheet".into()),
+                    direction: Some("upstream".into()),
+                    limit: Some(limit),
+                }))
+                .expect_err("invalid lineage limit must fail");
+            assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        }
+
+        let valid = match server.workbook_lineage(Parameters(LineageArgs {
+            handle: handle.clone(),
+            query: "Sales Sheet".into(),
+            kind: Some("worksheet".into()),
+            direction: Some("upstream".into()),
+            limit: Some(10),
+        })) {
+            Ok(value) => value,
+            Err(error) => {
+                return Err(Error::new(
+                    "TEST",
+                    format!("valid lineage request failed: {}", error.message),
+                ));
+            }
+        };
+        assert!(!valid.content.is_empty());
+
+        assert_eq!(server.close_workbook(&handle)?["closed"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn edit_creates_new_handle_without_mutating_source_session() -> TapResult<()> {
+        let server = TabKitMcp::new(None, false)?;
+        let created = server.create_workbook()?;
+        let source_handle = created["handle"]
+            .as_str()
+            .ok_or_else(|| Error::new("TEST", "source handle missing"))?
+            .to_owned();
+        let source_path = server.session(&source_handle)?.path.clone();
+        let source_sha = server.session(&source_handle)?.package.sha256.clone();
+
+        let edited = server.edit_workbook(EditArgs {
+            handle: source_handle.clone(),
+            batch: Batch {
+                edits: vec![edit::Edit::CreateWebDashboard(edit::WebDashboardSpec {
+                    name: "Web".into(),
+                    width: 1280,
+                    height: 720,
+                    extension_url: "http://127.0.0.1:8765/host.html".into(),
+                    html: "<main>Web</main>".into(),
+                    css: String::new(),
+                    javascript: String::new(),
+                })],
+            },
+        })?;
+        let candidate_handle = edited["handle"]
+            .as_str()
+            .ok_or_else(|| Error::new("TEST", "candidate handle missing"))?
+            .to_owned();
+
+        let source = server.session(&source_handle)?;
+        let candidate = server.session(&candidate_handle)?;
+        assert_eq!(source.path, source_path);
+        assert_eq!(source.package.sha256, source_sha);
+        assert_eq!(source.workbook.summary().dashboards, 0);
+        assert_eq!(candidate.workbook.summary().dashboards, 1);
+        assert_ne!(candidate.path, source.path);
+        assert_ne!(candidate.package.sha256, source.package.sha256);
+
+        drop(source);
+        drop(candidate);
+        assert_eq!(server.close_workbook(&candidate_handle)?["closed"], true);
+        assert_eq!(server.close_workbook(&source_handle)?["closed"], true);
+        Ok(())
     }
 
     #[test]

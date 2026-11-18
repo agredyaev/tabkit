@@ -130,3 +130,39 @@ pub fn require(ok: bool, code: &'static str, message: impl Into<String>) -> Resu
         Err(Error::new(code, message))
     }
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+
+    #[test]
+    fn require_and_error_display_preserve_contract_code_and_message() {
+        require(true, "TEST", "unused").unwrap_or_else(|error| {
+            panic!("true precondition failed: {error}");
+        });
+
+        let error = match require(false, "BOUND", "value is outside contract") {
+            Ok(()) => panic!("false precondition was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "BOUND");
+        assert_eq!(error.message, "value is outside contract");
+        assert_eq!(error.to_string(), "BOUND: value is outside contract");
+    }
+
+    #[test]
+    fn standard_error_conversions_keep_machine_readable_classes() {
+        let io = Error::from(std::io::Error::new(std::io::ErrorKind::NotFound, "missing"));
+        assert_eq!(io.code, "IO");
+
+        let json_error = match serde_json::from_str::<serde_json::Value>("{") {
+            Ok(_) => panic!("invalid JSON was accepted"),
+            Err(error) => error,
+        };
+        let json = Error::from(json_error);
+        assert_eq!(json.code, "JSON");
+
+        let zip = Error::from(zip::result::ZipError::FileNotFound);
+        assert_eq!(zip.code, "ZIP");
+    }
+}
