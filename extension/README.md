@@ -1,50 +1,60 @@
-# TabKit Web Dashboard extension
+# TabKit web-dashboard runtime
 
-This directory contains the browser runtime embedded by `tabkit-extension-host` and the localhost development TREX manifest.
+Browser assets and development manifest for `tabkit-extension-host`.
+
+## Files
+
+| Path | Purpose |
+| --- | --- |
+| `host.html` | extension entry point |
+| `host.css` | host status/frame styles |
+| `host.js` | bundle verification, sandbox, Tableau bridge |
+| `vendor/tableau.extensions.1.17.0.min.js` | vendored Tableau Extensions API |
+| `tabkit-web-dashboard.trex` | localhost development manifest only |
 
 ## Production
 
-Use:
+Use the Windows release artifact:
 
-    tabkit-extension-host-v<version>-windows-x64.zip
+```text
+tabkit-extension-host-v<version>-windows-x64.zip
+```
 
-The host can run on the same Windows VM as the official Tableau MCP server. They are independent processes and must use different local ports.
+Start:
 
-Example:
+```powershell
+$env:TABKIT_EXTENSION_SIGNING_KEY="<base64-key>"
+.\tabkit-extension-host.exe --bind 127.0.0.1:8765 --base-path /tabkit
+```
 
-    tabkit-extension-host.exe --bind 127.0.0.1:8765 --base-path /tabkit
+Expose `/tabkit/*` through HTTPS and allow the final `host.html` URL in Tableau Server with
+Full Data Access.
 
-Expose `/tabkit/*` through HTTPS, safe-list the public `host.html` URL in Tableau Server, and allow Full Data Access.
+Production does not require installing `tabkit-web-dashboard.trex`.
 
-Production does not require installing `tabkit-web-dashboard.trex`. TabKit writes the extension reference and URL directly into the workbook.
-
-Configure the same base64 32-byte `TABKIT_EXTENSION_SIGNING_KEY` on the TabKit authoring process and on `tabkit-extension-host`.
-
-See [docs/EXTENSION_DEPLOYMENT.md](../docs/EXTENSION_DEPLOYMENT.md).
+Full procedure: [Extension host deployment](../docs/EXTENSION_DEPLOYMENT.md).
 
 ## Development
 
-Unsigned execution is allowed only on loopback.
+Unsigned bundles are accepted only on loopback.
 
-Serve this directory locally:
+```bash
+python -m http.server 8765 --directory extension
+```
 
-    python -m http.server 8765 --directory extension
+Development URL:
 
-The development manifest points to:
+```text
+http://localhost:8765/host.html
+```
 
-    http://localhost:8765/host.html
-
-## Runtime contract
+## Workbook settings
 
 TabKit stores:
 
-- `tabkit.bundle_b64`
-- `tabkit.bundle_mac`
+| Key | Content |
+| --- | --- |
+| `tabkit.bundle_b64` | base64 runtime bundle |
+| `tabkit.bundle_mac` | HMAC-SHA256 signature; empty only for localhost development |
 
-The decoded bundle contains `runtime_version`, `html`, `css`, and `javascript`.
-
-Generated JavaScript receives `window.tabkit` rather than direct access to `tableau.extensions`. The exposed methods are documented in `docs/WEB_DASHBOARD.md`.
-
-## Vendored dependency
-
-`vendor/tableau.extensions.1.17.0.min.js` is taken from the official Tableau Extensions API v1.17.0 release tag. The upstream Apache-2.0 license is retained as `vendor/LICENSE-tableau-extensions-api.txt`.
+Runtime/bridge contract: [Web dashboards](../docs/WEB_DASHBOARD.md).

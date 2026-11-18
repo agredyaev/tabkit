@@ -1,43 +1,48 @@
 # Authoring
 
-TabKit exposes the supported Tableau 2026.2.4 edit subset through semantic operations. MCP clients provide typed intent, not Tableau XML, node IDs, zone IDs, or XML paths.
+TabKit edits Tableau workbooks through typed semantic operations. Callers provide object names and
+properties; TabKit owns Tableau XML, generated IDs, insertion points, and post-edit verification.
 
-## Edit operations
+## Edit surface
 
-```text
-create_calculation
-create_parameter
-create_worksheet
-create_filter_action
-create_parameter_action
-create_web_dashboard
-create_dashboard
+| Operation | Creates | Depends on |
+| --- | --- | --- |
+| `create_calculation` | calculated field | existing datasource fields; same-batch calculations are supported |
+| `create_parameter` | workbook parameter | none |
+| `create_worksheet` | bar, line, KPI, or text-table worksheet | existing datasource fields |
+| `create_filter_action` | dashboard filter action | existing dashboard + source worksheet |
+| `create_parameter_action` | dashboard parameter action | existing dashboard + worksheet field + parameter |
+| `create_dashboard` | native Tableau dashboard | existing worksheets / worksheet filters |
+| `create_web_dashboard` | full-canvas HTML/CSS/JS dashboard | extension host URL |
+
+Every `workbook_edit` returns a new candidate handle. The source handle is unchanged.
+
+## Dependency rule
+
+One edit call is evaluated against one immutable workbook snapshot.
+
+Same-batch calculation references are the only cross-edit dependency resolved inside a batch.
+For other dependencies, chain candidate handles:
+
+```mermaid
+flowchart LR
+    open["workbook_open"] --> base["create worksheets / parameters"]
+    base --> candidate1["candidate handle"]
+    candidate1 --> dashboard["create dashboard"]
+    dashboard --> candidate2["candidate handle"]
+    candidate2 --> actions["create actions"]
+    actions --> validate["validateWorkbook"]
+    validate --> publish["publish"]
 ```
-
-Every edit produces a new candidate handle. The source handle is unchanged.
-
-Except for calculation-to-calculation references already supported inside one batch, an edit may reference only objects that exist on the source handle. When one newly created object depends on another, use sequential `workbook_edit` calls.
 
 ## Parameters
 
-`create_parameter` creates a field in Tableau's synthetic `Parameters` datasource.
-
-Supported datatypes:
-
-- `string`
-- `integer`
-- `real`
-- `boolean`
-
-Supported domains:
-
-- `any`
-- `list`
-- `range` for integer/real parameters
-
-A list contains 1..1000 values and must contain the current value. A range requires `min <= current <= max` and a positive `step`.
-
-Example:
+| Property | Supported values |
+| --- | --- |
+| datatype | `string`, `integer`, `real`, `boolean` |
+| domain | `any`, `list`, numeric `range` |
+| list size | 1..1000 values |
+| range | `min <= current <= max`, positive `step` |
 
 ```json
 {
@@ -45,142 +50,54 @@ Example:
   "caption": "View Mode",
   "datatype": "string",
   "value": "Bar",
-  "domain": {
-    "kind": "list",
-    "values": ["Bar", "Line"]
-  },
-  "name": "[View Mode]"
+  "domain": { "kind": "list", "values": ["Bar", "Line"] }
 }
 ```
 
-## Worksheet creation
+## Worksheets
 
-`create_worksheet` uses fields already indexed in one existing datasource. It does not create datasource fields, joins, relationships, calculations, bins, groups, sets, table calculations, or LOD expressions implicitly.
+`create_worksheet` uses fields already present in one datasource.
 
-Supported worksheet families:
-
-| kind | required fields | generated structure |
+| Kind | Required fields | Generated view |
 | --- | --- | --- |
-| `bar` | one dimension, one numeric measure | discrete dimension + aggregated measure |
-| `line` | one date/datetime dimension, one numeric measure | month-truncated continuous date + aggregated measure |
-| `kpi` | one numeric measure | text encoding |
-| `text_table` | one or two dimensions, one numeric measure | dimensions on shelves + measure text encoding |
+| `bar` | dimension + numeric measure | discrete dimension + aggregated measure |
+| `line` | date/datetime + numeric measure | continuous month date + aggregated measure |
+| `kpi` | numeric measure | text mark |
+| `text_table` | 1-2 dimensions + numeric measure | dimensions + measure text |
 
-Supported measure aggregations are `sum`, `average`, `min`, `max`, `count`, and `count_distinct`.
+Aggregations: `sum`, `average`, `min`, `max`, `count`, `count_distinct`.
 
-Example:
+TabKit does not implicitly create joins, relationships, fields, calculations, bins, groups, sets,
+table calculations, or LOD expressions.
 
-```json
-{
-  "op": "create_worksheet",
-  "name": "Sales by Region",
-  "datasource": "Orders",
-  "kind": "bar",
-  "dimension": "Region",
-  "secondary_dimension": null,
-  "measure": "Sales",
-  "aggregation": "sum"
-}
-```
+## Actions
 
-Unsupported field/type combinations are rejected before patch application.
+| Operation | Trigger | Effect |
+| --- | --- | --- |
+| `create_filter_action` | `select`, `hover` | filters other compatible worksheets on the dashboard |
+| `create_parameter_action` | `select`, `hover` | writes a worksheet field value to an existing parameter |
 
-## Filter actions
+Filter actions exclude the source worksheet from their target set.
 
-`create_filter_action` implements cross-sheet dashboard filtering through Tableau's filter-action contract.
+Parameter actions require a unique source `column-instance`; pass `source_instance` when the field
+has multiple instances. Source and target datatypes must match. Clear-selection behavior is
+`do-nothing`.
 
-The source worksheet must already be placed on the target dashboard. A selection on the source filters the other compatible worksheets on that dashboard. The source worksheet is excluded from its own action.
+## Dashboard paths
 
-Example:
+| Need | Operation | Documentation |
+| --- | --- | --- |
+| Tableau-native sheets, containers, filter cards | `create_dashboard` | [Native dashboards](DASHBOARD.md) |
+| arbitrary HTML/CSS/JavaScript presentation | `create_web_dashboard` | [Web dashboards](WEB_DASHBOARD.md) |
 
-```json
-{
-  "op": "create_filter_action",
-  "caption": "Filter other views",
-  "dashboard": "Executive Overview",
-  "source_sheet": "Sales by Region",
-  "run_on": "select",
-  "auto_clear": true
-}
-```
+## Validation
 
-This is not synthetic authoring of Tableau's persisted `Apply to Worksheets` filter-sharing state. Dashboard filter cards still expose existing worksheet Filters-shelf filters; filter actions provide cross-sheet interaction.
+Local edit success means:
 
-## Parameter actions
+1. operation inputs passed TabKit preconditions;
+2. source-preserving patches applied;
+3. candidate XML reparsed;
+4. created objects were found in the reparsed candidate.
 
-`create_parameter_action` writes a worksheet field value into an existing Tableau parameter.
-
-The source worksheet must be present on the dashboard. The source field must expose a unique `column-instance`; when it has multiple instances, pass `source_instance`. Source and target datatypes must match.
-
-Supported triggers:
-
-- `select`
-- `hover`
-
-`create_parameter_action` uses Tableau `ATTR` semantics for the source field and `do-nothing` clear-selection behavior. Aggregate Parameter Actions are not supported.
-
-Example:
-
-```json
-{
-  "op": "create_parameter_action",
-  "caption": "Set selected region",
-  "dashboard": "Executive Overview",
-  "source_sheet": "Sales by Region",
-  "source_field": "Region",
-  "source_instance": "[none:Region:nk]",
-  "target_parameter": "Selected Region",
-  "run_on": "select"
-}
-```
-
-## Web dashboards
-
-`create_web_dashboard` creates a fixed-size Tableau dashboard whose presentation surface is one full-canvas TabKit Dashboard Extension.
-
-HTML, CSS, and JavaScript are stored as a versioned base64-encoded UTF-8 JSON bundle in `tabkit.bundle_b64`. Runtime version 1 is current. The unencoded HTML/CSS/JavaScript payload is limited to 1 MiB and the serialized bundle is limited to 2 MiB.
-
-Remote production authoring requires `TABKIT_EXTENSION_SIGNING_KEY`, a base64 32-byte key. TabKit stores an HMAC-SHA256 under `tabkit.bundle_mac`; the extension host verifies it before execution. Unsigned bundles are accepted only for localhost development.
-
-The default development host is `http://localhost:8765/host.html`. Remote `extension_url` values must be valid absolute HTTPS URLs. User-info and malformed hostless URLs are rejected.
-
-Generated code runs in a sanitized sandboxed iframe and receives the `window.tabkit` bridge instead of direct access to `tableau.extensions`. Data-source reads use Tableau Full Data Access APIs; worksheet summary/filter methods remain available for hybrid dashboards.
-
-Example:
-
-```json
-{
-  "op": "create_web_dashboard",
-  "name": "Executive Overview",
-  "width": 1440,
-  "height": 900,
-  "extension_url": "https://bi.example.com/tabkit/host.html",
-  "html": "<main id=\"app\"></main>",
-  "css": "#app { display: grid; }",
-  "javascript": "const sources = await tabkit.listDataSources();"
-}
-```
-
-See [Web dashboard extension](WEB_DASHBOARD.md) for the runtime and bridge contract and [Extension deployment](EXTENSION_DEPLOYMENT.md) for production setup.
-
-## Composition
-
-Objects that depend on newly authored objects are chained through candidate handles:
-
-```text
-open
--> create worksheets
--> create parameters
--> create dashboard using the new worksheets
--> create filter/parameter actions using the new dashboard and parameters
--> validateWorkbook
--> publish
-```
-
-This keeps each candidate reparsed and indexed before it becomes a dependency of the next edit.
-
-## Validation boundary
-
-Local authoring enforces supported semantic preconditions, source-preserving patch checks, and post-edit reparse checks.
-
-The official Tableau 2026.2.0 XSD is the structural contract. TabKit does not vendor or reimplement it. Tableau REST 3.29 `validateWorkbook` remains the final XSD and semantic validation authority before publish.
+It does **not** replace Tableau validation. Run `workbook_validate` before publish; Tableau REST 3.29
+`validateWorkbook` remains the XSD and semantic validation authority.
