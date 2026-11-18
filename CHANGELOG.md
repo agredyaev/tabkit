@@ -2,10 +2,27 @@
 
 ## Unreleased
 
+## 0.9.1 - 2026-11-18
+
 ### MCP
 
 - added `workbook_create` for TabKit-owned blank TWB 26.2 handles;
 - added `workbook_create -> create_web_dashboard -> validate -> publish` lifecycle coverage.
+
+### Lineage
+
+- resolved SQL Server `WITH ... INSERT INTO #temp` writes after CTE definitions;
+- resolved chained CTE and local-temp dependencies in statement order;
+- forward or missing local-temp producers now emit explicit gaps without false lineage edges;
+- added bidirectional source-to-dashboard coverage for CTE and local-temp chains.
+
+### Quality
+
+- added package, patch, formula, signing, XML, workbook, REST-boundary, and lineage edge-case tests;
+- `cargo llvm-cov --all-targets` reports 74.45% line coverage and 81.01% for `lineage.rs`;
+- live Tableau REST sign-in, download, validation, publish, and job paths remain external integration boundaries.
+
+Public package/CLI version: `0.9.1`.
 
 ## 0.9.0 - 2026-11-18
 
