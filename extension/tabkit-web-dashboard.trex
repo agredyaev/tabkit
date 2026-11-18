@@ -3,7 +3,7 @@
   <dashboard-extension id="io.tabkit.web-dashboard" extension-version="0.1.0">
     <default-locale>en_US</default-locale>
     <name resource-id="name"/>
-    <description>TabKit sandboxed HTML and JavaScript dashboard host.</description>
+    <description>TabKit HTML/CSS/JavaScript dashboard runtime.</description>
     <author name="TabKit" email="noreply@tabkit.local" organization="TabKit" website="https://github.com/agredyaev/tabkit"/>
     <min-api-version>1.10</min-api-version>
     <source-location>

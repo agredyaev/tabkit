@@ -81,4 +81,4 @@ Current runtime limits:
 
 Remote URLs require HTTPS. Production bundles require a valid signature. Tableau Full Data Access remains explicit and Tableau continues to enforce workbook, datasource, and user permissions.
 
-The sandbox and CSP are defense in depth. The production trust boundary is the signed bundle created by the trusted TabKit authoring path.
+The sandbox and CSP add isolation. Production execution requires a bundle signed by the configured TabKit authoring key.

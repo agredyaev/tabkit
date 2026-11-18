@@ -113,7 +113,7 @@ struct State {
     allow_local_paths: bool,
 }
 
-/// Cloneable MCP facade over one shared bounded session/workspace state.
+/// Cloneable MCP facade over shared session and workspace state.
 #[derive(Clone)]
 pub struct TabKitMcp {
     state: Arc<State>,
@@ -129,7 +129,7 @@ struct SearchWorkbooksArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct OpenWorkbookArgs {
-    /// Tableau workbook LUID. Use this for Amazon Quick/server workflows.
+    /// Tableau workbook LUID to download from the configured Tableau site.
     workbook_id: Option<String>,
     /// Local TWB/TWBX path. Disabled for remote HTTP unless explicitly allowed.
     path: Option<String>,
@@ -167,7 +167,7 @@ struct LineageArgs {
 struct EditArgs {
     /// Source workbook handle.
     handle: String,
-    /// Semantic calculation/dashboard edit batch.
+    /// Batch of supported calculation, parameter, worksheet, dashboard, web-dashboard, and action edits.
     batch: Batch,
 }
 
@@ -453,9 +453,7 @@ impl TabKitMcp {
         json_result(&value)
     }
 
-    #[tool(
-        description = "Inspect compact typed workbook objects without returning raw Tableau XML."
-    )]
+    #[tool(description = "Inspect indexed workbook objects without returning raw Tableau XML.")]
     fn workbook_inspect(
         &self,
         Parameters(args): Parameters<InspectArgs>,
@@ -475,7 +473,7 @@ impl TabKitMcp {
     }
 
     #[tool(
-        description = "Trace bounded upstream or downstream Tableau workbook lineage from a named object."
+        description = "Trace upstream or downstream Tableau workbook lineage from a named object. The result is capped by the limit argument."
     )]
     fn workbook_lineage(
         &self,
@@ -527,7 +525,7 @@ impl TabKitMcp {
     }
 
     #[tool(
-        description = "Apply a source-preserving semantic edit batch and return a new workbook handle. Supports calculations, parameters, minimal bar/line/KPI/text-table worksheets, dashboards, filter actions, and parameter actions. Referenced objects must already exist on the source handle; chain workbook_edit calls when one new object depends on another. The source handle is never overwritten."
+        description = "Apply a semantic edit batch and return a new workbook handle; the source handle is unchanged. Supported operations: create_calculation, create_parameter, create_worksheet, create_dashboard, create_web_dashboard, create_filter_action, and create_parameter_action. Except for supported same-batch calculation references, referenced objects must already exist on the source handle; chain workbook_edit calls for dependencies. Remote create_web_dashboard requires an HTTPS extension_url and TABKIT_EXTENSION_SIGNING_KEY."
     )]
     async fn workbook_edit(
         &self,
@@ -558,7 +556,7 @@ impl TabKitMcp {
     }
 
     #[tool(
-        description = "Publish a candidate workbook to Tableau Server. Set overwrite=true only when replacing an existing workbook is intended."
+        description = "Publish a workbook handle to Tableau Server. Validate edited candidates with workbook_validate before publish. Set overwrite=true only when replacing an existing workbook."
     )]
     async fn workbook_publish(
         &self,
@@ -610,7 +608,7 @@ impl ServerHandler for TabKitMcp {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "TabKit is a headless Tableau Server 2026.2.4 workbook runtime. Open a workbook once, then use compact inspect/lineage/edit tools; do not request or generate raw Tableau XML.".to_owned(),
+                "TabKit operates on Tableau 2026.2.4 workbooks. Open a workbook once and reuse its handle. Inspect or trace lineage before editing when object names or dependencies are unknown. Use workbook_edit for typed edits; do not request or generate raw Tableau XML. Validate edited candidates with workbook_validate before publish. create_web_dashboard is available through workbook_edit; remote web dashboards require an HTTPS extension_url and TABKIT_EXTENSION_SIGNING_KEY.".to_owned(),
             )
     }
 }

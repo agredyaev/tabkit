@@ -2,7 +2,6 @@
 
 TabKit is a headless Tableau 2026.2.4 workbook runtime and MCP server.
 
-
 ## Target
 
 - Tableau Server / Cloud workbook format: **26.2**
@@ -11,7 +10,7 @@ TabKit is a headless Tableau 2026.2.4 workbook runtime and MCP server.
 - Tableau workbook XSD contract: **2026.2.0**
 - Rust: **1.89+**
 
-TabKit does not ship a second Tableau schema validator. It keeps a small typed projection of the workbook objects required for inspection, lineage, and supported edits. Final workbook validation is delegated to Tableau REST `validateWorkbook`.
+TabKit does not ship a second Tableau schema validator. It keeps a typed projection of the workbook objects required for inspection, lineage, and supported edits. Final workbook validation is delegated to Tableau REST `validateWorkbook`.
 
 ## Scope
 
@@ -22,11 +21,11 @@ TabKit supports:
 - Initial SQL and Custom SQL lineage;
 - SQL Server local `#temp` lineage across Initial SQL and Custom SQL;
 - calculation and parameter creation;
-- basic bar, line, KPI, and text-table worksheet creation from existing datasource fields;
+- bar, line, KPI, and text-table worksheet creation from existing datasource fields;
 - dashboard creation from existing worksheets;
 - full-screen HTML/CSS/JavaScript web dashboards through the signed, standalone Dashboard Extension host;
 - dashboard filter actions and parameter actions;
-- dashboard layout, filter cards, and bounded presentation styling;
+- dashboard layout, filter cards, and supported worksheet presentation styles;
 - Tableau workbook search and download;
 - Tableau `validateWorkbook`;
 - Tableau publish and background job polling;
@@ -36,16 +35,16 @@ TabKit does not automate Tableau Desktop.
 
 ## Deployment binaries
 
-Production deployment uses two binaries:
+Deployment components:
 
-- `tabkit-mcp` — MCP server;
-- `tabkit-extension-host` — embedded Tableau Dashboard Extension web host.
+- `tabkit-mcp` — TabKit MCP server;
+- `tabkit-extension-host` — runtime required by `create_web_dashboard`.
 
-The extension host may run on the same Windows VM as the official Tableau MCP server; they are independent services and use different local ports.
+The components can be deployed independently. The extension host can run on the same Windows VM as the official Tableau MCP server; they use separate local ports.
 
-For a handoff-ready Windows host procedure, use [TabKit extension host: Windows deployment handoff](docs/EXTENSION_DEPLOYMENT.md).
+For Windows host setup, use [Extension host deployment](docs/EXTENSION_DEPLOYMENT.md).
 
-The `tabkit` CLI remains available for local development and workbook operations.
+The `tabkit` CLI is for local development and workbook operations.
 
 ## Build
 
@@ -80,8 +79,8 @@ target\release\tabkit-extension-host.exe
 CI and GitHub releases publish Windows x64 deployment ZIPs only:
 
 ```text
-tabkit-mcp-v0.9.0-windows-x64.zip
-tabkit-extension-host-v0.9.0-windows-x64.zip
+tabkit-mcp-v<version>-windows-x64.zip
+tabkit-extension-host-v<version>-windows-x64.zip
 ```
 
 The extension-host binary embeds its browser assets.
@@ -207,7 +206,7 @@ create_web_dashboard
 create_dashboard
 ```
 
-Worksheet creation is intentionally narrow: bar, line, KPI, and text-table views over existing datasource fields. Native dashboard creation supports nested rows/columns, fixed and weighted sizing, padding, gaps, text, worksheet zones, filter cards, and bounded worksheet presentation styles. `create_web_dashboard` instead emits one full-canvas Dashboard Extension object and runs a bounded HTML/CSS/JavaScript bundle in the bundled sandbox host.
+`create_worksheet` supports bar, line, KPI, and text-table views over existing datasource fields. `create_dashboard` supports nested rows/columns, fixed and weighted sizing, padding, gaps, text, worksheet zones, filter cards, and the documented worksheet presentation styles. `create_web_dashboard` creates one full-canvas Dashboard Extension and stores its HTML/CSS/JavaScript bundle in the workbook.
 
 Dashboard filter cards expose filters that already exist on the source worksheet. Cross-sheet interaction is available through filter actions; TabKit does not synthesize persisted `Apply to Worksheets` sharing state.
 

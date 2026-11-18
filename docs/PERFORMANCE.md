@@ -21,13 +21,12 @@ TabKit itself; it does not include Tableau Server network latency.
 | 10 MiB | 20,000 fields; 1,000 calcs; 202 worksheets | 54.05 ms | 185 MiB/s | 1.75 ms | 0.040 us | 53.15 us | 0.99 us | 54.51 ms | 60.46 ms |
 | 50 MiB | 80,000 fields; 4,000 calcs; 802 worksheets | 259.22 ms | 193 MiB/s | 7.46 ms | 0.049 us | 115.88 us | 1.14 us | 263.11 ms | 284.82 ms |
 
-The edit measurements include source-preserving patching and the intentional full candidate
+The edit measurements include source-preserving patching and the full candidate
 reparse/postcondition check. The reparsed candidate `Workbook` is retained and handed to the caller,
 so TabKit no longer copies the whole candidate through `String -> Vec<u8> -> String` or reparses it
 again merely to create an MCP candidate session.
 
-The 50 MiB edit cases use one iteration to keep the profile practical. Treat those values as
-engineering reference points rather than statistical p95 measurements.
+The 50 MiB edit cases use one iteration. These values are engineering reference points, not statistical p95 measurements.
 
 ## Dashboard filter scaling
 
@@ -40,7 +39,7 @@ dashboard edit is repeated with increasing numbers of filter cards over that wor
 | 10 | 28.85 ms |
 | 100 | 28.97 ms |
 
-The near-flat result is intentional. Filter metadata is indexed once per worksheet for an edit batch;
+The measurements are near-flat because filter metadata is indexed once per worksheet for an edit batch;
 each additional card resolves from that index instead of rescanning the worksheet subtree. This is
 the regression guard for the former `O(filters x worksheet-subtree)` path.
 
@@ -74,22 +73,22 @@ the full semantic postcondition reparse.
 
 ## Complexity model after cleanup
 
-The hot paths now have the following intended behavior:
+The hot paths have the following behavior:
 
 - XML nodes are numbered in preorder and store an exclusive `subtree_end`; descendant iteration is a
   contiguous node-ID range rather than repeated parent climbing.
 - Closing-tag insertion offsets are indexed during XML parse, so edit insertion-point lookup is O(1).
 - Workbook exact field labels and lineage exact names have case-insensitive hash indexes with actual
-  string verification; ambiguous labels fall back safely instead of returning an arbitrary match.
+  string verification; ambiguous labels do not return an arbitrary match.
 - A bounded lineage trace allocates only for the bounded visited set and builds its result from
   traversed adjacency lists. It no longer allocates/zeros a graph-sized `seen` vector or scans all
   nodes and all edges after BFS. Runtime still depends on the actual local degree/subgraph visited,
   which is why trace time is not expected to be constant across fixtures.
 - Dashboard filter metadata is scanned/indexed once per source worksheet per edit batch.
 - Calculation insertion does not repeatedly scan the enclosing datasource.
-- Candidate postconditions still perform one full reparse by design. That safety boundary remains
+- Candidate postconditions perform one full reparse. That safety boundary remains
   O(candidate XML size), but the parsed candidate is retained rather than thrown away and rebuilt.
-- TWBX preservation still performs deliberate package/hash I/O to prove stale-base and unrelated-entry
+- TWBX preservation performs package/hash I/O to prove stale-base and unrelated-entry
   byte preservation.
 
 ## Repeatability and scope
@@ -99,6 +98,5 @@ A preceding final-code run produced 263-265 ms for the 50 MiB calculation + dash
 environment, not hardware-independent SLAs.
 
 The profile is stage-oriented rather than a flame graph. No measured stage currently justifies unsafe
-parser code, weaker preservation checks, or a generic graph/indexing framework. The next performance
-evidence should come from real Tableau 2026.2.4 workbooks with representative TWBX package sizes and
+parser code, weaker preservation checks, or a generic graph/indexing framework. The next performance measurement target is real Tableau 2026.2.4 workbooks with representative TWBX package sizes and
 semantic complexity.

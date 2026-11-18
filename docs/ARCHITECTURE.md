@@ -7,7 +7,7 @@ MCP client
    |
    +-- stdio (desktop/local)
    |
-   +-- stateless Streamable HTTP (remote/Quick)
+   +-- stateless Streamable HTTP (remote)
           |
        TabKit state
           |
@@ -36,17 +36,16 @@ traversal, authoring, and package mutation are local.
 - `package.rs` — TWB/TWBX admission and source-preserving repack; candidate writes return the already verified output package so MCP does not reopen it merely to create a handle.
 - `workbook.rs` — Tableau 26.2 semantic projection, including parameters, typed IDs, and verified exact-label lookup indexes for the 2026.2.4 target.
 - `formula.rs` — lexical extraction/validation of Tableau field references.
-- `lineage.rs` — compact typed nodes/edges and bounded traversal.
+- `lineage.rs` — typed nodes/edges and bounded traversal.
 - `patch.rs` — deterministic non-overlapping byte patches and preservation checks.
 - `edit.rs` — calculation, parameter, bounded worksheet, action, native-dashboard, and web-dashboard semantic specs and lowering.
-- `extension/` — trusted Dashboard Extension host, vendored Tableau Extensions API, sandbox runtime, and narrow Tableau bridge.
+- `extension/` — Dashboard Extension host, vendored Tableau Extensions API, sandbox runtime, and explicit Tableau bridge allowlist.
 - `rest.rs` — Tableau REST 3.29 auth/search/download/validate/publish/job boundary.
-- `mcp.rs` — nine thin MCP tools over the core runtime.
+- `mcp.rs` — nine MCP tools over the core runtime.
 - `mcp_main.rs` — stdio/Streamable HTTP launcher.
 - `main.rs` — CLI.
 - `perf.rs` — ignored release-only stage benchmark/profile harness.
 
-A module is split only when a real implementation boundary exists.
 
 ## MCP state and concurrency
 
@@ -59,11 +58,11 @@ handlers so the Tokio HTTP runtime is not blocked. The process admits at most 64
 handles. A RAII session permit is atomically reserved before download/edit/parse work begins and is
 released only when the final `Arc<Session>` drops, so concurrent requests cannot oversubscribe the
 limit. Callers release handles with `workbook_close`. Tableau-downloaded and TabKit-generated
-candidate files are likewise session-owned and removed when the final Arc drops, so an in-flight
-validate/publish can safely outlive handle removal without leaking workspace files.
+candidate files are likewise session-owned and removed when the final Arc drops. An in-flight
+validate/publish may outlive handle removal; workspace files remain until its final session reference is released.
 
-HTTP runs stateless and can use a simple bearer guard. Non-loopback unauthenticated startup requires
-an explicit override, intended only for a protected private/VPC deployment.
+HTTP runs stateless and supports bearer-token authentication. Non-loopback unauthenticated startup requires
+an explicit override; that override disables application-level authentication.
 
 ## Tableau schema policy
 
@@ -100,8 +99,8 @@ local temp tables, and common session/setup statements such as `SET NOCOUNT ON` 
 `DROP TABLE IF EXISTS #temp`. A local temp node is keyed by Tableau connection ID, then Custom SQL
 reading `#temp` resolves to that same node. Edges distinguish physical/temp inputs and the Initial
 SQL write, so the graph can represent `source table -> #temp -> Custom SQL -> Tableau field`.
-Unsupported T-SQL mutations preserve the safely known portion and emit
-`initial_sql_lineage_partial`. SQL Server `##global` temporary tables deliberately emit
+Unsupported T-SQL mutations preserve the modeled portion and emit
+`initial_sql_lineage_partial`. SQL Server `##global` temporary tables emit
 `global_temp_table_unsupported`; TabKit does not guess their cross-session/server scope.
 
 Unsupported Initial SQL or Custom SQL otherwise produces an explicit coverage gap rather than being
@@ -135,7 +134,7 @@ create_dashboard
 
 Calculation batches are preflighted as one semantic unit. A calculation may reference another calculation created earlier or later in the same batch when the formula uses that target's bracketed Tableau internal `name`; captions are not rewritten into formula references. Generated calculation fields are reparsed and verified as postconditions after patch application.
 
-Other authored dependencies are intentionally sequential in the MVP. A newly created worksheet, parameter, or dashboard must be reparsed into a candidate handle before a later edit references it. This keeps dependency resolution against one immutable typed snapshot.
+Except for supported same-batch calculation references, authored dependencies are sequential. A newly created worksheet, parameter, or dashboard must be reparsed into a candidate handle before a later edit references it. Dependency resolution therefore uses one immutable typed snapshot per edit call.
 
 Parameter authoring is limited to string/integer/real/boolean values with any/list/range domains. Worksheet authoring is limited to bar, line, KPI, and text-table structures over existing datasource fields. Unsupported combinations fail before patch application.
 
@@ -160,15 +159,15 @@ supplies the exact instance. It does not guess or synthesize persisted cross-she
 
 ## Performance model
 
-The intended runtime invariant is:
+The runtime flow is:
 
 ```text
-open once -> parse/index once -> many sub-millisecond/small-millisecond queries -> emit candidate
+open once -> parse/index once -> indexed queries -> emit candidate
 ```
 
 The release profile harness separately measures parse/index, lineage build, exact lineage lookup,
 bounded trace, exact inspect, semantic edit, 100-calculation batches, and 1/10/100-card dashboard
-filter scaling. Candidate edit validation still performs one full semantic reparse by design, but
+filter scaling. Candidate edit validation performs one full semantic reparse, but
 the resulting parsed Workbook is retained instead of being copied/reparsed again for the candidate
 session. See `PERFORMANCE.md`.
 
@@ -180,4 +179,4 @@ session. See `PERFORMANCE.md`.
 - Full in-memory workbook DOM.
 - Generic raw XML mutation.
 - Reimplementation of Tableau calculation execution.
-- Framework layers added only for possible future features.
+- Generic framework layers without a current runtime boundary.

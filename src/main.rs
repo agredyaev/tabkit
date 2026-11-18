@@ -15,7 +15,7 @@ use tabkit::{
 
 #[derive(Parser)]
 #[command(name = "tabkit")]
-#[command(about = "Headless Tableau 2026.2.4 workbook runtime/compiler")]
+#[command(about = "Inspect, edit, validate, and publish Tableau 2026.2.4 workbooks")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

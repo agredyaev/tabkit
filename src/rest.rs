@@ -1,11 +1,11 @@
 //! Tableau REST 3.29 boundary for server-backed operations.
 //!
-//! This client is deliberately narrow: PAT sign-in, workbook discovery/download,
+//! This client implements PAT sign-in, workbook discovery/download,
 //! `validateWorkbook`, multipart publish, job lookup, and sign-out. Configuration
 //! is pinned to REST 3.29 and HTTPS. Redirects are disabled.
 //!
 //! Tableau is the authority for XSD and semantic workbook validation. Local
-//! package checks establish file safety/preservation; they are not a substitute
+//! package checks enforce admission and preservation constraints; they are not a substitute
 //! for `validateWorkbook`.
 
 use crate::{

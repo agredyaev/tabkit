@@ -109,7 +109,7 @@ pub struct Edge {
     pub kind: EdgeKind,
 }
 
-/// Machine-readable record that provenance was intentionally left unresolved.
+/// Machine-readable record for unresolved provenance.
 #[derive(Clone, Debug, Serialize)]
 pub struct Gap {
     pub code: &'static str,
@@ -518,7 +518,7 @@ impl<'a> Builder<'a> {
                                 self.gap(
                                     "initial_sql_lineage_partial",
                                     connection.name.clone(),
-                                    "Initial SQL contains statements outside the safely modeled query/temp-table subset",
+                                    "Initial SQL contains statements outside the modeled query/temp-table subset",
                                 );
                             }
                         }

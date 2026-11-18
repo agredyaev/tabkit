@@ -1,6 +1,6 @@
 # Authoring
 
-TabKit authors a bounded Tableau 2026.2.4 subset through semantic edit operations. MCP clients provide typed intent, not Tableau XML, node IDs, zone IDs, or XML paths.
+TabKit exposes the supported Tableau 2026.2.4 edit subset through semantic operations. MCP clients provide typed intent, not Tableau XML, node IDs, zone IDs, or XML paths.
 
 ## Edit operations
 
@@ -104,7 +104,7 @@ Example:
 }
 ```
 
-This is not synthetic authoring of Tableau's persisted `Apply to Worksheets` filter-sharing state. Dashboard filter cards still expose existing worksheet Filters-shelf filters; filter actions provide the MVP cross-sheet interaction.
+This is not synthetic authoring of Tableau's persisted `Apply to Worksheets` filter-sharing state. Dashboard filter cards still expose existing worksheet Filters-shelf filters; filter actions provide cross-sheet interaction.
 
 ## Parameter actions
 
@@ -117,7 +117,7 @@ Supported triggers:
 - `select`
 - `hover`
 
-The MVP uses Tableau `ATTR` semantics for the source field and `do-nothing` clear-selection behavior. Aggregate Parameter Actions are outside the current authoring contract.
+`create_parameter_action` uses Tableau `ATTR` semantics for the source field and `do-nothing` clear-selection behavior. Aggregate Parameter Actions are not supported.
 
 Example:
 
@@ -138,13 +138,13 @@ Example:
 
 `create_web_dashboard` creates a fixed-size Tableau dashboard whose presentation surface is one full-canvas TabKit Dashboard Extension.
 
-HTML, CSS, and JavaScript are stored as a versioned base64-encoded UTF-8 JSON bundle in `tabkit.bundle_b64`. Runtime version 1 is current. The unencoded HTML/CSS/JavaScript payload is limited to 1 MiB and the serialized bundle is bounded separately.
+HTML, CSS, and JavaScript are stored as a versioned base64-encoded UTF-8 JSON bundle in `tabkit.bundle_b64`. Runtime version 1 is current. The unencoded HTML/CSS/JavaScript payload is limited to 1 MiB and the serialized bundle is limited to 2 MiB.
 
 Remote production authoring requires `TABKIT_EXTENSION_SIGNING_KEY`, a base64 32-byte key. TabKit stores an HMAC-SHA256 under `tabkit.bundle_mac`; the extension host verifies it before execution. Unsigned bundles are accepted only for localhost development.
 
 The default development host is `http://localhost:8765/host.html`. Remote `extension_url` values must be valid absolute HTTPS URLs. User-info and malformed hostless URLs are rejected.
 
-Generated code runs in a sanitized sandboxed iframe and receives the narrow `window.tabkit` bridge instead of direct access to `tableau.extensions`. Data-source reads use Tableau Full Data Access APIs; worksheet summary/filter methods remain available for hybrid dashboards.
+Generated code runs in a sanitized sandboxed iframe and receives the `window.tabkit` bridge instead of direct access to `tableau.extensions`. Data-source reads use Tableau Full Data Access APIs; worksheet summary/filter methods remain available for hybrid dashboards.
 
 Example:
 

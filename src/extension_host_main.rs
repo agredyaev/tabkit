@@ -25,7 +25,7 @@ const TABLEAU_JS: &str = include_str!("../extension/vendor/tableau.extensions.1.
 
 #[derive(Parser)]
 #[command(name = "tabkit-extension-host")]
-#[command(about = "Static Tableau Dashboard Extension host for TabKit")]
+#[command(about = "HTTP host and bundle verifier for TabKit Dashboard Extensions")]
 struct Args {
     /// HTTP bind address. Put TLS in front of this listener for production.
     #[arg(long, default_value = "127.0.0.1:8765")]

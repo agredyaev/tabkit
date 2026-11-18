@@ -6,7 +6,7 @@ TabKit errors have two parts:
 CODE: human-readable message
 ```
 
-The code is stable enough for clients to branch on. The message explains the concrete failed operation or violated precondition.
+The code is the machine-readable error contract. Clients use the code for branching. The message is diagnostic text and must not be parsed.
 
 For MCP errors, TabKit also places the code in:
 
@@ -72,7 +72,7 @@ STALE_BASE
 PRESERVATION
 ```
 
-These errors reject unsupported versions, malformed XML, unsafe/bounded package conditions, or source-preservation failures before publishing.
+These errors reject unsupported versions, malformed XML, package limit/path/symlink violations, or source-preservation failures before publishing.
 
 ### Tableau REST
 

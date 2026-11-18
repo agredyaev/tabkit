@@ -2,8 +2,8 @@
 //!
 //! Parsing records structure and byte spans without normalizing or reserializing
 //! the input. Node IDs are preorder positions local to one [`Document`], which
-//! makes every subtree a contiguous ID range and permits allocation-light
-//! traversal while the original UTF-8 source remains authoritative.
+//! makes every subtree a contiguous ID range for descendant traversal while the
+//! original UTF-8 source remains authoritative.
 
 use crate::{Error, Result, require};
 use serde::{Deserialize, Serialize};

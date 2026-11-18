@@ -6,7 +6,7 @@ This directory contains the browser runtime embedded by `tabkit-extension-host` 
 
 Use:
 
-    tabkit-extension-host-v0.9.0-windows-x64.zip
+    tabkit-extension-host-v<version>-windows-x64.zip
 
 The host can run on the same Windows VM as the official Tableau MCP server. They are independent processes and must use different local ports.
 
@@ -43,7 +43,7 @@ TabKit stores:
 
 The decoded bundle contains `runtime_version`, `html`, `css`, and `javascript`.
 
-Generated JavaScript receives the bounded `window.tabkit` API rather than direct access to `tableau.extensions`.
+Generated JavaScript receives `window.tabkit` rather than direct access to `tableau.extensions`. The exposed methods are documented in `docs/WEB_DASHBOARD.md`.
 
 ## Vendored dependency
 

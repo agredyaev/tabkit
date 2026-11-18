@@ -4,21 +4,21 @@
 //!
 //! # Compatibility contract
 //!
-//! TabKit is pinned to TWB 26.2 and Tableau REST 3.29. It intentionally does not
-//! maintain a second Tableau XSD model or validator: the original TWB XML remains
+//! TabKit is pinned to TWB 26.2 and Tableau REST 3.29. It does not maintain a
+//! second Tableau XSD model or validator: the original TWB XML remains
 //! authoritative locally, and Tableau `validateWorkbook` is the final XSD and
 //! semantic validation boundary.
 //!
 //! # Mutation invariant
 //!
 //! Supported edits are expressed semantically, lowered to source-checked XML
-//! patches, and reparsed before a candidate is returned. Callers never need to
-//! mutate the XML index directly, and unrelated source regions are preserved.
+//! patches, and reparsed before a candidate is returned. Raw XML mutation is not
+//! exposed by the public edit API, and unrelated source regions are preserved.
 //!
 //! # Error contract
 //!
 //! Public fallible APIs return [`Error`]. Branch on [`Error::code`], not the
-//! diagnostic message; messages are intended to explain the concrete failed
+//! diagnostic message; messages explain the concrete failed
 //! operation without exposing credentials or raw upstream payloads.
 
 pub mod edit;
@@ -58,7 +58,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Error {
     /// Stable symbolic classification used by Rust and MCP clients.
     pub code: &'static str,
-    /// User-facing diagnostic for the failed operation; never a secret carrier.
+    /// Diagnostic for the failed operation; must not contain secrets.
     pub message: String,
 }
 

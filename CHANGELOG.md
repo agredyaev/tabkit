@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0 - 2026-11-17
+## 0.9.0 - 2026-11-18
 
 - Replaced the legacy implementation with the current headless Tableau 2026.2.4 runtime/compiler.
 - Added MCP stdio and Streamable HTTP transports through `rmcp`.

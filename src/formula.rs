@@ -1,9 +1,8 @@
 //! Bounded lexical analysis for Tableau formulas.
 //!
-//! The analyzer exists to validate editor preconditions and discover bracketed
-//! field references. It is intentionally not a Tableau parser or evaluator and
-//! therefore does not claim semantic validity; final semantics remain Tableau's
-//! responsibility.
+//! The analyzer validates editor preconditions and discovers bracketed field
+//! references. It does not parse or evaluate Tableau formula semantics; Tableau
+//! remains the semantic validation authority.
 //!
 //! External SQL/script/model-extension functions are rejected by the editing
 //! boundary rather than passed through as opaque executable content.

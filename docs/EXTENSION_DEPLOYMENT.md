@@ -1,4 +1,4 @@
-# TabKit extension host: Windows deployment handoff
+# TabKit extension host: Windows deployment
 
 Use this guide to deploy the TabKit HTML dashboard runtime on a Windows VM.
 
@@ -16,7 +16,7 @@ TabKit will use that value as `extension_url`.
 
 Required:
 
-- `tabkit-extension-host-v0.9.0-windows-x64.zip`;
+- `tabkit-extension-host-v<version>-windows-x64.zip` from https://github.com/agredyaev/tabkit/releases/latest;
 - access to the Windows VM;
 - a public HTTPS hostname already used by the environment, or another approved HTTPS endpoint for the VM;
 - ability to add a route in the existing HTTPS reverse proxy/gateway;
@@ -32,24 +32,24 @@ If no key has been provided, generate one in PowerShell:
     $rng.GetBytes($key)
     [Convert]::ToBase64String($key)
 
-Store and transfer the value through the normal secret-management channel. Do not put it in Git, the workbook, or the public URL.
+Store and transfer the value through an approved secret store or secure channel. Do not put it in Git, the workbook, or the public URL.
 
 ## 1. Start the host
 
 Extract:
 
-    tabkit-extension-host-v0.9.0-windows-x64.zip
+    tabkit-extension-host-v<version>-windows-x64.zip
 
 Open PowerShell in the extracted directory and run:
 
     $env:TABKIT_EXTENSION_SIGNING_KEY="<base64-key>"
     .\tabkit-extension-host.exe --bind 127.0.0.1:8765 --base-path /tabkit
 
-The process must stay running.
+The process must stay running. For persistent use, run it under the VM's existing process supervisor. `tabkit-extension-host.exe` does not install itself as a Windows service.
 
 Verify locally on the VM:
 
-    Invoke-WebRequest http://127.0.0.1:8765/tabkit/healthz
+    (Invoke-WebRequest http://127.0.0.1:8765/tabkit/healthz).Content
 
 Expected body:
 
@@ -59,7 +59,7 @@ The official Tableau MCP can continue running on the same VM on its existing por
 
 ## 2. Publish the host through HTTPS
 
-Add one route to the VM's existing HTTPS reverse proxy or gateway:
+The host listens on localhost HTTP. Add one route to the VM's existing HTTPS reverse proxy or gateway:
 
     https://<public-host>/tabkit/*
         ->
@@ -78,9 +78,9 @@ These routes must pass through:
 
 Do not put an interactive login redirect in front of these routes.
 
-From a normal user workstation, not only from the VM, verify:
+From a workstation that will open Tableau dashboards, verify:
 
-    Invoke-WebRequest https://<public-host>/tabkit/healthz
+    (Invoke-WebRequest https://<public-host>/tabkit/healthz).Content
 
 Expected body:
 
@@ -132,7 +132,7 @@ Send the requester:
 
 Also confirm:
 
-- health URL returns `ok` from a normal workstation;
+- health URL returns `ok` from a workstation that will open Tableau dashboards;
 - the extension URL is present in the Tableau Server site safe list;
 - Full Data Access is set to Allow;
 - the URL is not on the server block list;
@@ -153,7 +153,7 @@ The host is ready when all of these are true:
 - [ ] the URL is not blocked at server level;
 - [ ] the same signing key is configured on the host and the TabKit authoring process.
 
-Once these checks pass, return the `host.html` URL. No other host configuration is required for TabKit.
+Once these checks pass, return the `host.html` URL. No additional TabKit host settings are required.
 
 ## What TabKit does with the URL
 

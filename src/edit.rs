@@ -5,9 +5,8 @@
 //! non-overlapping expected-source patches, applies them as one candidate, then
 //! reparses and checks operation-specific postconditions.
 //!
-//! The base workbook is never mutated. Raw XML mutation is deliberately not part
-//! of this API; unsupported Tableau constructs fail closed rather than being
-//! approximated.
+//! The base workbook is never mutated. The API does not expose raw XML mutation;
+//! unsupported Tableau constructs are rejected instead of approximated.
 
 use crate::{
     Error, Result,
@@ -99,7 +98,7 @@ pub enum ParameterDomain {
     },
 }
 
-/// Minimal worksheet families whose Tableau 2026.2 structure is deterministic.
+/// Worksheet families supported by `create_worksheet`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorksheetKind {
@@ -109,7 +108,7 @@ pub enum WorksheetKind {
     TextTable,
 }
 
-/// Aggregations supported by the bounded worksheet compiler.
+/// Aggregations supported by `create_worksheet`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Aggregation {
@@ -127,7 +126,7 @@ impl Default for Aggregation {
     }
 }
 
-/// Narrow worksheet compiler contract over fields already present in one datasource.
+/// `create_worksheet` contract over fields already present in one datasource.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorksheetSpec {
@@ -141,7 +140,7 @@ pub struct WorksheetSpec {
     pub aggregation: Aggregation,
 }
 
-/// Tableau activation modes intentionally exposed by the MVP action compiler.
+/// Trigger values supported by filter and parameter actions.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionTrigger {
@@ -185,19 +184,25 @@ pub struct ParameterActionSpec {
     pub run_on: ActionTrigger,
 }
 
-/// Full-screen Dashboard Extension whose HTML, CSS, and JavaScript are persisted
-/// as extension instance settings in the workbook.
+/// Full-canvas Dashboard Extension with a workbook-stored HTML/CSS/JavaScript bundle.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WebDashboardSpec {
+    /// Dashboard name.
     pub name: String,
+    /// Fixed dashboard width in pixels.
     pub width: u32,
+    /// Fixed dashboard height in pixels.
     pub height: u32,
+    /// Dashboard Extension host URL. Remote URLs must use HTTPS.
     #[serde(default = "default_web_extension_url")]
     pub extension_url: String,
+    /// HTML body content stored in the signed bundle.
     pub html: String,
+    /// CSS stored in the signed bundle.
     #[serde(default)]
     pub css: String,
+    /// JavaScript stored in the signed bundle and executed with `window.tabkit`.
     #[serde(default)]
     pub javascript: String,
 }
@@ -884,7 +889,7 @@ fn parameter_batch_patch(
             _ => {
                 return Err(Error::new(
                     "PARAMETER",
-                    "MVP parameter authoring supports string, integer, real, and boolean datatypes",
+                    "Parameter authoring supports only string, integer, real, and boolean datatypes",
                 ));
             }
         };
@@ -1027,7 +1032,7 @@ fn parameter_literal(datatype: DataType, value: &serde_json::Value) -> Result<St
             require(
                 !value.contains(['"', '\n', '\r', '\0']),
                 "PARAMETER",
-                "MVP string parameter values cannot contain quotes, newlines, or NUL",
+                "String parameter values cannot contain quotes, newlines, or NUL",
             )?;
             Ok(format!("\"{value}\""))
         }
@@ -1056,7 +1061,7 @@ fn parameter_literal(datatype: DataType, value: &serde_json::Value) -> Result<St
             }),
         _ => Err(Error::new(
             "PARAMETER",
-            "MVP parameter authoring supports string, integer, real, and boolean datatypes",
+            "Parameter authoring supports only string, integer, real, and boolean datatypes",
         )),
     }
 }
@@ -1103,7 +1108,7 @@ fn worksheet_xml(book: &Workbook, spec: &WorksheetSpec) -> Result<String> {
     require(
         matches!(measure.datatype, DataType::Integer | DataType::Real),
         "WORKSHEET",
-        "MVP worksheet measures must be integer or real fields",
+        "Worksheet measures must be integer or real fields",
     )?;
 
     let dimension = spec

@@ -162,7 +162,7 @@ A sheet zone supports:
 - `show_title`
 - `fit`: `standard`, `entire_view`, `fit_width`, or `fit_height`
 
-Fit is compiled into the dashboard window/viewpoint rather than guessed from zone geometry.
+Fit is written to the dashboard window/viewpoint.
 
 ## Text
 
@@ -177,7 +177,7 @@ Text zones support:
 
 ## Worksheet formatting
 
-`view_styles` is keyed by worksheet name and can control the supported subset:
+`view_styles` is keyed by worksheet name and supports:
 
 - worksheet font family / size / color
 - axis visibility/color/width
@@ -206,7 +206,7 @@ A dashboard filter is a layout object:
 
 Supported control values:
 
-- `auto` (default; preserve Tableau-native card behavior, useful for date/range filters)
+- `auto` (default; preserve Tableau-native card behavior)
 - `single_dropdown`
 - `multiple_dropdown`
 - `single_list`
@@ -218,8 +218,8 @@ Supported value domains (optional; omit to preserve the native card default):
 - `all_database` -> Tableau `values="database"`
 - `relevant` -> Tableau `values="relevant"`
 
-The filter card is deliberately conservative. The source worksheet must already contain the field
-on its Filters shelf and expose a matching `column-instance`. TabKit then:
+The source worksheet must already contain the field on its Filters shelf and expose a matching
+`column-instance`. TabKit then:
 
 1. resolves the source worksheet and field through the typed workbook index;
 2. resolves the exact Tableau column-instance;
@@ -241,6 +241,3 @@ that dashboard. The source worksheet is excluded from its own action.
 
 Parameter-driven interaction is available through `create_parameter_action`. Parameters and actions
 are documented in [AUTHORING.md](AUTHORING.md).
-
-The distinction is explicit: filter cards are presentation over worksheet filter state; filter
-actions are dashboard interactions.
