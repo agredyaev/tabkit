@@ -29,12 +29,11 @@ jobs:
           }
 
       - run: cargo test --release --locked --all-targets
-      - run: cargo build --release --locked --bin tabkit --bin tabkit-mcp --bin tabkit-extension-host
+      - run: cargo build --release --locked --bin tabkit-mcp --bin tabkit-extension-host
 
       - name: Package Windows
         shell: pwsh
         run: |
-          Compress-Archive -Path @("target/release/tabkit.exe","README.md","LICENSE") -DestinationPath "tabkit-v$env:PACKAGE_VERSION-windows-x64.zip"
           Compress-Archive -Path @("target/release/tabkit-mcp.exe","README.md","LICENSE") -DestinationPath "tabkit-mcp-v$env:PACKAGE_VERSION-windows-x64.zip"
           Compress-Archive -Path @("target/release/tabkit-extension-host.exe","README.md","LICENSE","docs/EXTENSION_DEPLOYMENT.md") -DestinationPath "tabkit-extension-host-v$env:PACKAGE_VERSION-windows-x64.zip"
 
@@ -42,7 +41,6 @@ jobs:
         with:
           name: release-windows-x64
           path: |
-            tabkit-v${{ env.PACKAGE_VERSION }}-windows-x64.zip
             tabkit-mcp-v${{ env.PACKAGE_VERSION }}-windows-x64.zip
             tabkit-extension-host-v${{ env.PACKAGE_VERSION }}-windows-x64.zip
           if-no-files-found: error
