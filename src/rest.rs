@@ -83,13 +83,18 @@ pub struct Rest {
     site_id: String,
 }
 
+/// Metadata returned after a bounded workbook download.
 #[derive(Debug, Serialize)]
 pub struct DownloadReceipt {
+    /// Bytes persisted.
     pub bytes: u64,
+    /// SHA-256 of the downloaded payload.
     pub sha256: String,
+    /// Detected payload type: `twb` or `twbx`.
     pub format: &'static str,
 }
 
+/// Bounded workbook metadata returned by Tableau search.
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkbookInfo {
     pub id: String,
@@ -101,6 +106,9 @@ pub struct WorkbookInfo {
     pub has_extracts: Option<bool>,
 }
 
+/// Tableau `validateWorkbook` result.
+///
+/// HTTP 422 is represented as `valid = false` rather than a transport error.
 #[derive(Debug, Serialize)]
 pub struct Validation {
     pub valid: bool,

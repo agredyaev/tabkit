@@ -22,9 +22,13 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 /// Hard admission limits shared by package I/O and REST transfer paths.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
+    /// Maximum embedded TWB XML bytes.
     pub xml_bytes: u64,
+    /// Maximum TWB/TWBX package bytes.
     pub file_bytes: u64,
+    /// Maximum TWBX archive entries.
     pub zip_entries: usize,
+    /// Maximum total uncompressed TWBX entry bytes.
     pub zip_expanded_bytes: u64,
 }
 
@@ -42,7 +46,9 @@ impl Default for Limits {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
+    /// Plain Tableau workbook XML.
     Twb,
+    /// Tableau packaged workbook ZIP containing one TWB plus resources.
     Twbx,
 }
 
@@ -56,8 +62,11 @@ struct Entry {
 
 /// Snapshot of an admitted package used to enforce stale-base and preservation checks.
 pub struct Package {
+    /// Source/candidate package path.
     pub path: PathBuf,
+    /// Admitted package type.
     pub kind: Kind,
+    /// SHA-256 of the admitted package snapshot.
     pub sha256: String,
     entries: Vec<Entry>,
     twb_entry: Option<usize>,
