@@ -1,6 +1,6 @@
-# TapKit
+# TabKit
 
-TapKit is a headless Tableau 2026.2.4 workbook runtime and MCP server.
+TabKit is a headless Tableau 2026.2.4 workbook runtime and MCP server.
 
 
 ## Target
