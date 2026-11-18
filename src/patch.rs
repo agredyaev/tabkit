@@ -1,10 +1,9 @@
 //! Bounded source-preserving text patch application.
 //!
 //! A patch is a compare-and-replace operation over an original byte span. Its
-//! `expected` slice is a stale-precondition guard, not documentation. All patches
-//! are admitted together: ranges must be UTF-8 boundaries, non-overlapping, and
-//! the computed output size must fit the configured limit before allocation.
-//! Unchanged regions are verified byte-for-byte after application.
+//! `expected` slice guards against stale planning. `apply` admits all patches
+//! together, requires UTF-8 boundaries/non-overlap, and checks output size before
+//! allocation. It verifies unchanged regions byte-for-byte after application.
 
 use crate::{Error, Result, require, xml::Span};
 use serde::{Deserialize, Serialize};
@@ -17,7 +16,7 @@ pub struct Patch {
     pub span: Span,
     /// Exact source bytes required at `span`; mismatch rejects stale planning.
     pub expected: String,
-    /// Bytes inserted in place of `expected` after all patches are admitted.
+    /// Replacement bytes for `expected` after admission.
     pub replacement: String,
     /// Diagnostic origin of the patch; it has no effect on application semantics.
     pub reason: String,
@@ -25,10 +24,10 @@ pub struct Patch {
 
 /// Applies all patches as one source-preserving candidate.
 ///
-/// Admission validates every range and expected slice before output allocation.
-/// Overlap, stale expected bytes, UTF-8 boundary violations, or an output larger
-/// than `max_bytes` reject the entire operation. After construction, every
-/// untouched region is compared with the original source.
+/// `apply` validates every range and expected slice before output allocation.
+/// Overlap, stale expected bytes, UTF-8 boundary violations, or output above
+/// `max_bytes` reject the operation. After construction, `apply` compares every
+/// untouched region with the original source.
 pub fn apply(input: &str, patches: &[Patch], max_bytes: u64) -> Result<String> {
     let (sorted, output_len) = admitted_layout(input, patches, max_bytes)?;
     let mut output = String::new();

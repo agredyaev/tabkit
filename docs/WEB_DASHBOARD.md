@@ -11,7 +11,7 @@ The dashboard UI is supplied as HTML/CSS/JavaScript and stored inside the workbo
 | Presentation | one full-canvas Dashboard Extension |
 | UI source | HTML + CSS + JavaScript stored in the workbook |
 | Tableau access | `window.tabkit` bridge only |
-| Production host | one stable HTTPS `host.html` URL |
+| Production host | one HTTPS `host.html` URL shared by authored web dashboards |
 | Production integrity | HMAC-SHA256 signed bundle |
 | Tableau permission | Full Data Access |
 | Runtime | `tabkit-extension-host` |
@@ -23,11 +23,11 @@ flowchart LR
     tableau --> host["tabkit-extension-host"]
     host --> verify["Verify bundle"]
     verify --> frame["Sandboxed dashboard iframe"]
-    frame -->|window.tabkit RPC| bridge["Trusted Tableau bridge"]
+    frame -->|window.tabkit RPC| bridge["TabKit Tableau bridge"]
     bridge --> api["Tableau Extensions API"]
 ```
 
-The host is generic. Dashboard-specific HTML/CSS/JavaScript stays in the workbook, so one host can serve many workbooks.
+The host contains no dashboard-specific UI. HTML/CSS/JavaScript stays in the workbook; one host serves multiple workbooks.
 
 ## Create a dashboard
 
@@ -46,7 +46,7 @@ The host is generic. Dashboard-specific HTML/CSS/JavaScript stays in the workboo
 
 | Field | Requirement |
 | --- | --- |
-| `name` | new dashboard name |
+| `name` | dashboard name; must not already exist |
 | `width`, `height` | positive fixed pixel dimensions |
 | `extension_url` | HTTPS for remote hosts; localhost HTTP allowed for development |
 | `html` | body content |
@@ -111,7 +111,7 @@ Events:
 | --- | --- |
 | `filterChanged` | `{ worksheet, fieldName }` |
 | `selectionChanged` | `{ worksheet }` |
-| `summaryDataChanged` | `{ worksheet }` when supported by the Tableau runtime |
+| `summaryDataChanged` | `{ worksheet }`; registered only when `WorksheetEventType.SummaryDataChanged` exists |
 
 ## Security boundary
 
@@ -143,11 +143,11 @@ The authoring process and `tabkit-extension-host` must use the same base64-encod
 | HTML + CSS + JavaScript | 1 MiB |
 | serialized bundle | 2 MiB |
 
-Summary and logical-table data are read page-by-page; row and byte limits are applied while reading.
+The bridge reads summary and logical-table data page by page and enforces row and byte limits during pagination.
 
 ## Production requirements
 
-A production dashboard needs all five:
+Production requires:
 
 1. `tabkit-extension-host` running;
 2. public HTTPS route to `/tabkit/host.html`;

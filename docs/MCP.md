@@ -15,9 +15,9 @@ HTTP example:
 TABKIT_MCP_TOKEN="<token>" tabkit-mcp --transport http --bind 127.0.0.1:8000
 ```
 
-A non-loopback HTTP listener without `TABKIT_MCP_TOKEN` is rejected unless
-`--allow-unauthenticated-http` is explicitly supplied. That flag disables TabKit's application-level
-HTTP authentication; external access control then owns the boundary.
+A non-loopback HTTP listener without `TABKIT_MCP_TOKEN` fails unless
+`--allow-unauthenticated-http` is set. With that flag, TabKit performs no HTTP authentication;
+deployment network controls must restrict access.
 
 ## Tool lifecycle
 
@@ -86,8 +86,8 @@ MCP limit: 1..500 objects; default 100.
 | `direction` | `upstream` or `downstream`; default downstream |
 | `limit` | 1..1000 nodes; default 200 |
 
-The starting query must resolve to exactly one lineage node. Zero or multiple matches are returned as
-invalid parameters rather than choosing an arbitrary object.
+The starting query must resolve to exactly one lineage node. The tool rejects zero or multiple matches
+as invalid parameters.
 
 Lineage model: [Architecture](ARCHITECTURE.md#lineage).
 

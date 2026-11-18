@@ -1,6 +1,6 @@
 # Error contract
 
-TabKit errors are stable codes plus diagnostic text:
+TabKit errors contain a machine-readable code and diagnostic text:
 
 ```text
 CODE: message
@@ -24,9 +24,9 @@ MCP also returns the code as:
 
 ## Error groups
 
-| Group | Common codes | Meaning |
+| Group | Selected codes | Meaning |
 | --- | --- | --- |
-| edit/input | `ARGUMENT`, `FIELD_NOT_FOUND`, `WORKSHEET_NOT_FOUND`, `DASHBOARD_EXISTS`, `STYLE`, `LAYOUT` | request cannot be applied to this workbook |
+| edit/input | `ARGUMENT`, `FIELD_NOT_FOUND`, `WORKSHEET_NOT_FOUND`, `DASHBOARD_EXISTS`, `STYLE`, `LAYOUT` | request conflicts with workbook state or the edit contract |
 | package/XML | `VERSION`, `FORMAT`, `ENCODING`, `XML`, `ZIP_LIMIT`, `STALE_BASE`, `PRESERVATION` | workbook/package admission or preservation failure |
 | Tableau REST | `HTTP_TIMEOUT`, `HTTP`, `REST_REJECTED`, `REST_SHAPE`, `AUTH_CONFIG`, `AUTH` | network, authentication, or Tableau response failure |
 | runtime | `INTERNAL` | TabKit invariant/state failure |
@@ -36,10 +36,10 @@ Tableau structured REST failures preserve HTTP status and available Tableau `err
 
 ## Lineage gaps are not errors
 
-A workbook can remain usable when provenance is incomplete. Lineage therefore returns coverage gaps
-inside the graph result instead of failing the operation.
+Incomplete provenance does not invalidate the workbook. Lineage returns coverage gaps inside the graph
+result instead of failing the operation.
 
-Common gap codes:
+Gap codes:
 
 ```text
 initial_sql_lineage_unresolved
@@ -52,4 +52,4 @@ worksheet_field_unresolved
 dashboard_sheet_unresolved
 ```
 
-A gap means TabKit could not prove that lineage segment. It does not invent a replacement path.
+A gap marks a lineage segment that TabKit did not prove. TabKit does not invent a replacement path.

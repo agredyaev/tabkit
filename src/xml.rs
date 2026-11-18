@@ -13,7 +13,7 @@ use xmlparser::{ElementEnd, Token, Tokenizer};
 
 const NONE: u32 = u32::MAX;
 
-/// Preorder node ID stable only for the lifetime of its originating [`Document`].
+/// Preorder node ID valid only for the lifetime of its originating [`Document`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(pub u32);
 
@@ -85,9 +85,8 @@ pub struct Document {
 impl Document {
     /// Parses UTF-8 XML without reserialization or source normalization.
     ///
-    /// Invalid UTF-8, malformed XML, unsupported document shape, and spans that
-    /// cannot be represented by the bounded index are rejected before a
-    /// `Document` is returned.
+    /// Rejects invalid UTF-8, malformed XML, unsupported document shape, and spans
+    /// outside the bounded index before returning a `Document`.
     pub fn parse(bytes: Vec<u8>) -> Result<Self> {
         let source =
             String::from_utf8(bytes).map_err(|_| Error::new("ENCODING", "TWB must be UTF-8"))?;
@@ -96,8 +95,8 @@ impl Document {
 
     /// Takes ownership of XML text and builds spans directly against that string.
     ///
-    /// The retained string is the same source returned by [`Self::source`]; no
-    /// pretty-printing or entity normalization is applied to it.
+    /// [`Self::source`] returns the retained input string. `parse_string` performs
+    /// no pretty-printing or entity normalization.
     pub fn parse_string(source: String) -> Result<Self> {
         let mut names = Vec::<String>::new();
         let mut name_ids = HashMap::<String, u32>::new();
@@ -311,8 +310,8 @@ impl Document {
 
     /// Iterates descendants in preorder without including `root` itself.
     ///
-    /// This is valid because parsing records each subtree as one contiguous range
-    /// of document-local node IDs.
+    /// Parsing records each subtree as one contiguous range of document-local
+    /// node IDs, so preorder iteration needs no subtree scan.
     pub fn descendants(&self, root: NodeId) -> Descendants<'_> {
         let node = self.nodes[root.0 as usize];
         Descendants {
@@ -338,7 +337,7 @@ impl Document {
 
     /// Returns the exact encoded attribute slice from the original source.
     ///
-    /// Use [`Self::attr`] when XML entity decoding is required.
+    /// Call [`Self::attr`] for XML entity decoding.
     pub fn attr_raw(&self, id: NodeId, wanted: &str) -> Option<&str> {
         let node = self.nodes[id.0 as usize];
         let start = node.first_attr as usize;
@@ -350,8 +349,8 @@ impl Document {
 
     /// Returns an attribute value with XML entities decoded on demand.
     ///
-    /// A borrowed value is returned when decoding is unnecessary; otherwise the
-    /// decoded value is owned.
+    /// Returns a borrowed value when decoding is unnecessary; otherwise owns the
+    /// decoded value.
     pub fn attr(&self, id: NodeId, wanted: &str) -> Result<Option<Cow<'_, str>>> {
         self.attr_raw(id, wanted).map(decode_attribute).transpose()
     }

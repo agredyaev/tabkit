@@ -1,8 +1,8 @@
 # Native dashboards
 
 `create_dashboard` compiles a semantic layout tree into a fixed-size Tableau dashboard.
-The caller controls layout and supported presentation properties; TabKit owns Tableau zone IDs,
-normalized coordinates, dependencies, windows/viewpoints, and XML ordering.
+Input controls layout and presentation properties. TabKit generates Tableau zone IDs, normalized
+coordinates, dependencies, windows/viewpoints, and XML ordering.
 
 ## Supported surface
 
@@ -83,7 +83,7 @@ Fit modes: `standard`, `entire_view`, `fit_width`, `fit_height`.
 
 ## Styles
 
-Each layout item can carry:
+Each layout item accepts:
 
 `background` · `border_color` · `border_width` · `corner_radius` · `padding` · `margin`
 
@@ -111,7 +111,7 @@ Resolution rules:
 2. field must already be on that worksheet's Filters shelf;
 3. TabKit resolves the matching Tableau `column-instance`;
 4. if more than one instance matches, the caller must provide `instance`;
-5. required datasource-dependency metadata is copied into the dashboard.
+5. TabKit copies required datasource-dependency metadata into the dashboard.
 
 A filter card does not create Tableau's persisted **Apply to Worksheets** sharing state.
 Use `create_filter_action` for cross-sheet filtering.

@@ -13,7 +13,7 @@ Headless Tableau 2026.2.4 workbook runtime and MCP server.
 | Rust | 1.89+ |
 
 TabKit parses, inspects, traces, edits, validates, and publishes TWB/TWBX workbooks.
-It does not automate Tableau Desktop and does not implement a second Tableau XSD validator.
+TabKit does not automate Tableau Desktop or implement a second Tableau XSD validator.
 
 ## Components
 
@@ -44,7 +44,7 @@ tabkit-extension-host-v<version>-windows-x64.zip
 | MCP | stdio and Streamable HTTP |
 
 SQL Server lineage includes supported local `#temp` materialization across Initial SQL and Custom SQL.
-Unsupported or ambiguous lineage is returned as an explicit gap.
+TabKit records unsupported or ambiguous lineage as an explicit gap.
 
 ## Build
 
@@ -64,7 +64,7 @@ TABLEAU_PAT_NAME=pat-name
 TABLEAU_PAT_SECRET=pat-secret
 ```
 
-The PAT secret is read from an environment variable, not a CLI value.
+TabKit reads the PAT secret from an environment variable, not a CLI argument.
 
 ## MCP
 
@@ -117,17 +117,17 @@ flowchart LR
 TabKit enforces package limits, supported-version admission, edit preconditions, source-preserving
 patch checks, stale-base checks, and candidate reparse/postconditions.
 
-Tableau Server remains the final authority for XSD and Tableau semantic validity through REST 3.29
+Tableau Server performs XSD and Tableau semantic validation through REST 3.29
 `validateWorkbook` and publish.
 
-## Current boundaries
+## Boundaries
 
 - worksheet authoring: bar, line, KPI, text table;
 - actions: filter and parameter actions;
 - no raw XML mutation API;
 - no Tableau Desktop automation;
 - lineage identifies worksheet usage, not the exact worksheet shelf/encoding;
-- arbitrary SQL provenance may produce explicit gaps;
+- lineage returns an explicit gap when SQL provenance cannot be proved;
 - Tableau authentication uses PAT;
 - rendering/screenshot feedback is not implemented.
 

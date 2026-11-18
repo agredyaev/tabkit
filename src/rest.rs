@@ -1,8 +1,8 @@
 //! Tableau REST 3.29 boundary for server-backed operations.
 //!
-//! This client implements PAT sign-in, workbook discovery/download,
-//! `validateWorkbook`, multipart publish, job lookup, and sign-out. Configuration
-//! is pinned to REST 3.29 and HTTPS. Redirects are disabled.
+//! `Rest` implements PAT sign-in, workbook discovery/download,
+//! `validateWorkbook`, multipart publish, job lookup, and sign-out. `Config`
+//! pins REST 3.29 and HTTPS. The HTTP client disables redirects.
 //!
 //! Tableau is the authority for XSD and semantic workbook validation. Local
 //! package checks enforce admission and preservation constraints; they are not a substitute
@@ -33,11 +33,11 @@ use std::{
 pub struct Config {
     /// Absolute HTTPS Tableau Server base URL.
     pub server: String,
-    /// Tableau site content URL used during sign-in.
+    /// Tableau site content URL for sign-in.
     pub site: String,
-    /// Must equal [`REST_API_VERSION`]; other versions are rejected.
+    /// Must equal [`REST_API_VERSION`]; `Config::validate` rejects other versions.
     pub api_version: String,
-    /// Personal access token name sent to Tableau.
+    /// Personal access token name for Tableau sign-in.
     pub pat_name: String,
     /// Environment-variable name containing the PAT secret, never the secret itself.
     pub pat_secret_env: String,
@@ -75,7 +75,7 @@ impl Config {
     }
 }
 
-/// Authenticated REST 3.29 session bound to one Tableau site.
+/// Authenticated REST 3.29 session for one Tableau site.
 pub struct Rest {
     config: Config,
     client: Client,
@@ -83,7 +83,7 @@ pub struct Rest {
     site_id: String,
 }
 
-/// Metadata returned after a bounded workbook download.
+/// Metadata from a bounded workbook download.
 #[derive(Debug, Serialize)]
 pub struct DownloadReceipt {
     /// Bytes persisted.
@@ -94,7 +94,7 @@ pub struct DownloadReceipt {
     pub format: &'static str,
 }
 
-/// Bounded workbook metadata returned by Tableau search.
+/// Bounded workbook metadata from Tableau search.
 #[derive(Clone, Debug, Serialize)]
 pub struct WorkbookInfo {
     pub id: String,
@@ -108,7 +108,7 @@ pub struct WorkbookInfo {
 
 /// Tableau `validateWorkbook` result.
 ///
-/// HTTP 422 is represented as `valid = false` rather than a transport error.
+/// `Rest::validate_workbook` maps HTTP 422 to `valid = false`.
 #[derive(Debug, Serialize)]
 pub struct Validation {
     pub valid: bool,
@@ -118,9 +118,9 @@ pub struct Validation {
 impl Rest {
     /// Creates an HTTPS-only Tableau session from PAT configuration.
     ///
-    /// The secret is read from `Config::pat_secret_env`; it is not stored in the
-    /// configuration value or surfaced in TabKit errors. Redirects are disabled
-    /// so credentials are never forwarded to a different origin.
+    /// Reads the secret from `Config::pat_secret_env`. `Config` stores only the
+    /// environment-variable name. TabKit diagnostics omit the secret, and the
+    /// HTTP client disables redirects.
     pub fn sign_in(config: Config) -> Result<Self> {
         config.validate()?;
         let client = Client::builder()
@@ -250,8 +250,8 @@ impl Rest {
 
     /// Downloads to a unique file after detecting the actual TWB/TWBX payload type.
     ///
-    /// Bytes are streamed under `Limits::file_bytes`, hashed while written, then
-    /// admitted through [`Package::open`] before the path is returned.
+    /// Streams at most `Limits::file_bytes`, hashes bytes while writing, then runs
+    /// [`Package::open`] before returning the path.
     pub fn download_workbook_auto(
         &self,
         workbook_id: &str,
@@ -467,10 +467,11 @@ impl Rest {
         }
     }
 
-    /// Starts an asynchronous publish from an admitted, stable package snapshot.
+    /// Starts an asynchronous publish from an admitted package snapshot.
     ///
-    /// Upload blocks are 8 MiB. The source is hashed before upload and again
-    /// afterward; any concurrent change fails with `STALE_BASE` before commit.
+    /// Upload blocks are 8 MiB. The method captures the source hash before upload
+    /// and compares it again after streaming; a mismatch fails with `STALE_BASE`
+    /// before commit.
     /// The returned JSON is Tableau's publish/job response; this method does not
     /// wait for job completion.
     pub fn publish_workbook(

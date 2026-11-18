@@ -2,8 +2,8 @@
 
 Windows deployment for `tabkit-extension-host`.
 
-The host can run on the same VM as the official Tableau MCP server. They are independent processes
-and use different local ports.
+The host and the official Tableau MCP server share a VM without process dependency. Each process uses
+a different local port.
 
 ## Target state
 
@@ -90,7 +90,7 @@ Required routes:
 
 Preserve the `/tabkit` path. Do not place an interactive login redirect in front of these routes.
 
-From a normal user workstation:
+From a user workstation:
 
 ```powershell
 (Invoke-WebRequest https://<public-host>/tabkit/healthz).Content
@@ -112,7 +112,7 @@ Configure:
 | specific extension URL | `https://<public-host>/tabkit/host.html` |
 | Full Data Access | **Allow** |
 | permission prompt | Show/Hide according to site policy |
-| server block list | URL must not be blocked |
+| server block list | exclude the extension URL |
 
 Use the exact `host.html` URL unless a broader trust scope is explicitly required.
 
@@ -124,9 +124,9 @@ The deployment is ready when all checks pass:
 - [ ] localhost `/healthz` returns `ok`;
 - [ ] public HTTPS `/healthz` returns `ok` from a user workstation;
 - [ ] `host.html` opens without certificate or authentication redirect errors;
-- [ ] exact `host.html` URL is allowed in Tableau Server;
+- [ ] Tableau Server extension allow list contains the exact `host.html` URL;
 - [ ] Full Data Access is **Allow**;
-- [ ] URL is not blocked at server level;
+- [ ] server block list excludes the extension URL;
 - [ ] authoring and host processes use the same signing key.
 
 Return only:

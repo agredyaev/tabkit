@@ -1,8 +1,8 @@
 //! Typed semantic index over a source-backed Tableau TWB document.
 //!
-//! The index is selective: it types only entities needed by inspection, lineage,
-//! and supported edits while the complete [`Document`] remains authoritative for
-//! structure and bytes that are not represented in the typed projection.
+//! The index types only entities required by inspection, lineage, and supported
+//! edits. The complete [`Document`] remains authoritative for structure and bytes
+//! outside the typed projection.
 //!
 //! All dense IDs in this module are local to one `Workbook` instance. Reparsing
 //! a candidate rebuilds the index, so IDs must never be persisted or carried

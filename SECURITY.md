@@ -1,6 +1,6 @@
 # Security policy
 
-Security fixes target the current `main` branch and latest release.
+Security fixes target `main` and the release marked **Latest** on GitHub.
 
 ## Report a vulnerability
 
@@ -13,7 +13,7 @@ Include:
 - affected version or commit;
 - impact;
 - minimal reproduction;
-- relevant logs with secrets removed.
+- diagnostic logs with secrets removed.
 
 Do **not** include Tableau credentials, PAT values, private workbook data, signing keys, bearer tokens,
 or other production secrets. Do not open a public issue for an unpatched vulnerability.
@@ -33,7 +33,7 @@ flowchart LR
 
 | Boundary | Enforcement |
 | --- | --- |
-| MCP HTTP | optional exact bearer token; non-loopback unauthenticated start requires explicit override |
+| MCP HTTP | exact bearer token when configured; non-loopback unauthenticated start requires explicit override |
 | local workbook paths | stdio allowed; HTTP disabled unless explicitly enabled |
 | Tableau REST | HTTPS only, redirects disabled, PAT secret read from environment |
 | package input | size/ZIP/path/symlink/duplicate/compression-ratio limits |
@@ -50,14 +50,14 @@ Set `TABKIT_MCP_TOKEN` to require:
 Authorization: Bearer <token>
 ```
 
-TabKit compares the header to the configured token exactly. Binding unauthenticated HTTP to a
-non-loopback address is rejected unless `--allow-unauthenticated-http` is supplied. That flag removes
-TabKit's application-level HTTP authentication; external network/access controls then own the boundary.
+TabKit requires an exact bearer-token match when `TABKIT_MCP_TOKEN` is set. A non-loopback bind
+without a token fails unless `--allow-unauthenticated-http` is set. With that flag, TabKit performs no
+HTTP authentication; deployment network controls must restrict access.
 
 ## Tableau credentials
 
 TabKit configuration stores the **name** of the PAT-secret environment variable, not the secret.
-The secret is read only during sign-in.
+TabKit reads the secret during sign-in.
 
 REST protections:
 
@@ -71,8 +71,9 @@ See [Tableau REST](docs/TABLEAU_REST.md).
 
 ## Workbook/package input
 
-TWBX admission rejects unsafe paths, symlinks, duplicate/case-colliding entries, archive expansion
-over limits, suspicious compression ratios, and ambiguous embedded TWB files.
+TWBX admission rejects absolute/traversal/backslash/colon/NUL/empty-segment paths, symlinks,
+duplicate or case-colliding entries, expanded data above 16 GiB, entries above the
+`compressed_size * 5000 + 1 MiB` ratio guard, and zero/multiple embedded TWB files.
 
 Candidate writes re-check the source hash and verify unrelated TWBX entries remain byte-preserved.
 See [Workbook and package model](docs/WORKBOOK.md).

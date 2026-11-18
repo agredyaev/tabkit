@@ -7,7 +7,7 @@ properties; TabKit owns Tableau XML, generated IDs, insertion points, and post-e
 
 | Operation | Creates | Depends on |
 | --- | --- | --- |
-| `create_calculation` | calculated field | existing datasource fields; same-batch calculations are supported |
+| `create_calculation` | calculated field | existing datasource fields; supports same-batch calculation dependencies |
 | `create_parameter` | workbook parameter | none |
 | `create_worksheet` | bar, line, KPI, or text-table worksheet | existing datasource fields |
 | `create_filter_action` | dashboard filter action | existing dashboard + source worksheet |
@@ -119,5 +119,5 @@ Local edit success means:
 3. candidate XML reparsed;
 4. created objects were found in the reparsed candidate.
 
-It does **not** replace Tableau validation. Run `workbook_validate` before publish; Tableau REST 3.29
+Local edit success does **not** replace Tableau validation. Run `workbook_validate` before publish; Tableau REST 3.29
 `validateWorkbook` remains the XSD and semantic validation authority.

@@ -1,9 +1,9 @@
 //! TWB/TWBX admission and source-preserving repack.
 //!
-//! Opening a package establishes a snapshot contract: its hash and, for TWBX,
-//! entry metadata are retained so later writes can detect a stale source.
-//! Archive paths, entry count, expanded size, compression ratio, symlinks, and
-//! duplicate/case-colliding names are rejected before the embedded TWB is used.
+//! `Package::open` hashes the source and records TWBX entry metadata for
+//! stale-source detection during later writes. It rejects invalid archive paths,
+//! entry-count/expanded-size/compression-ratio violations, symlinks, and
+//! duplicate or case-colliding names before reading the embedded TWB.
 //!
 //! Repacking changes only the embedded TWB. Unrelated TWBX entries must retain
 //! their order, names, sizes, compression, and compressed bytes.
@@ -73,13 +73,12 @@ pub struct Package {
 }
 
 impl Package {
-    /// Admits a TWB/TWBX file and captures the snapshot required for safe edits.
+    /// Admits a TWB/TWBX file and captures the snapshot for candidate writes.
     ///
-    /// For TWB the file is read under `xml_bytes` and re-hashed to reject a
-    /// concurrent change. For TWBX every archive entry is checked before the
-    /// single embedded TWB is returned, and the package is re-hashed after
-    /// indexing. A successful `Package` therefore represents the exact source
-    /// bytes observed during admission.
+    /// For TWB, `Package::open` reads at most `xml_bytes` and re-hashes the file to
+    /// detect concurrent change. For TWBX, it checks every archive entry before
+    /// reading the single embedded TWB, then re-hashes the package after indexing.
+    /// The returned `Package` represents the source bytes observed during admission.
     pub fn open(path: &Path, limits: &Limits) -> Result<(Self, Vec<u8>)> {
         require(
             std::fs::metadata(path)?.len() <= limits.file_bytes,
@@ -220,11 +219,10 @@ impl Package {
     /// Writes a candidate only if the admitted source snapshot is still current.
     ///
     /// The output must keep the source package type and must not already exist.
-    /// TWBX output replaces only the embedded TWB; all unrelated compressed entry
-    /// bytes are verified unchanged before the temporary file is persisted.
-    /// The source hash is checked both before and after repacking, so a concurrent
-    /// source modification fails with `STALE_BASE` instead of producing a mixed
-    /// candidate.
+    /// TWBX output replaces only the embedded TWB. Before persistence,
+    /// `write_candidate` verifies every unrelated compressed entry byte-for-byte.
+    /// It checks the source hash before and after repacking; a mismatch fails with
+    /// `STALE_BASE` instead of producing a mixed candidate.
     pub fn write_candidate(&self, output: &Path, twb: &[u8], limits: &Limits) -> Result<Self> {
         require(
             twb.len() as u64 <= limits.xml_bytes,

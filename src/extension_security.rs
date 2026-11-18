@@ -1,4 +1,4 @@
-//! Signing helpers for trusted web-dashboard bundles.
+//! HMAC-SHA256 signing and verification for web-dashboard bundles.
 
 use crate::{Error, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};

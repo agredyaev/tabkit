@@ -5,9 +5,8 @@
 //! error codes to MCP categories.
 //!
 //! A handle keeps one immutable workbook snapshot alive. Edits create a new
-//! handle rather than mutating the source. TabKit-owned files are deleted only
-//! after the final in-flight `Arc<Session>` is released; user-supplied local files
-//! are never deleted by handle cleanup.
+//! handle rather than mutating the source. TabKit deletes owned files after the
+//! final in-flight `Arc<Session>` drops. Handle cleanup never deletes user files.
 
 use crate::{
     Error, Result as TapResult,
@@ -191,19 +190,18 @@ struct PublishArgs {
     name: String,
     /// Target Tableau project LUID.
     project_id: String,
-    /// Whether an existing workbook with the same name may be overwritten.
+    /// True permits replacement of an existing workbook with the same name.
     #[serde(default)]
     overwrite: bool,
 }
 
 impl TabKitMcp {
-    /// Creates shared MCP state without authenticating to Tableau.
+    /// Validates Tableau configuration without signing in.
     ///
-    /// Tableau configuration is validated immediately but sign-in is lazy on the
-    /// first server-backed tool call. `allow_local_paths` controls only
-    /// `workbook_open(path=...)`; downloaded and edited candidates always live in
-    /// TabKit's private temporary workspace. At most 64 workbook sessions may be
-    /// alive concurrently.
+    /// The first server-backed tool call starts Tableau sign-in. `allow_local_paths`
+    /// controls only `workbook_open(path=...)`. Downloaded and edited candidates
+    /// live in a TabKit-owned temporary directory. The server admits at most 64
+    /// live workbook sessions.
     pub fn new(tableau_config: Option<rest::Config>, allow_local_paths: bool) -> TapResult<Self> {
         if let Some(config) = &tableau_config {
             config.validate()?;
@@ -232,14 +230,14 @@ impl TabKitMcp {
                 let config = self.state.tableau_config.clone().ok_or_else(|| {
                     Error::new(
                         "TABLEAU_NOT_CONFIGURED",
-                        "Tableau-backed tools are unavailable because this MCP server has no Tableau REST configuration",
+                        "Tableau-backed tools require Tableau REST configuration",
                     )
                 })?;
                 *slot = Some(Arc::new(Rest::sign_in(config)?));
             }
-            slot.as_ref()
-                .cloned()
-                .ok_or_else(|| Error::new("INTERNAL", "Tableau client was not initialized"))?
+            slot.as_ref().cloned().ok_or_else(|| {
+                Error::new("INTERNAL", "Tableau client initialization did not complete")
+            })?
         };
         f(&rest)
     }
@@ -367,7 +365,7 @@ impl TabKitMcp {
                 if !self.state.allow_local_paths {
                     return Err(Error::new(
                         "LOCAL_PATHS_DISABLED",
-                        "This MCP server does not accept local workbook paths; use workbook_id or start the server with local paths enabled",
+                        "MCP server does not accept local workbook paths; use workbook_id or enable local paths",
                     ));
                 }
                 self.insert_path(PathBuf::from(path), false)
@@ -538,7 +536,7 @@ impl TabKitMcp {
     }
 
     #[tool(
-        description = "Run Tableau Server 2026.2.4 syntactic and semantic validation for the workbook XML. For a TWBX handle, TabKit sends the embedded TWB to Tableau validateWorkbook; packaged resources are checked by the publish path."
+        description = "Send workbook XML to Tableau Server 2026.2.4 validateWorkbook. For TWBX, TabKit sends the embedded TWB; publish checks packaged resources."
     )]
     async fn workbook_validate(
         &self,
@@ -591,7 +589,7 @@ impl TabKitMcp {
     }
 
     #[tool(
-        description = "Release an in-memory workbook handle when it is no longer needed. User-provided local source files are never deleted; TabKit-owned download/candidate files are removed after the final in-flight session reference is released."
+        description = "Release an in-memory workbook handle. Handle cleanup never deletes user local files. TabKit deletes owned downloads/candidates after the final in-flight session reference drops."
     )]
     fn workbook_close(
         &self,
@@ -608,7 +606,7 @@ impl ServerHandler for TabKitMcp {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "TabKit operates on Tableau 2026.2.4 workbooks. Open a workbook once and reuse its handle. Inspect or trace lineage before editing when object names or dependencies are unknown. Use workbook_edit for typed edits; do not request or generate raw Tableau XML. Validate edited candidates with workbook_validate before publish. create_web_dashboard is available through workbook_edit; remote web dashboards require an HTTPS extension_url and TABKIT_EXTENSION_SIGNING_KEY.".to_owned(),
+                "TabKit operates on Tableau 2026.2.4 workbooks. Open a workbook once and reuse its handle. Inspect or trace lineage before editing when object names or dependencies require discovery. Use workbook_edit for typed edits; do not request or generate raw Tableau XML. Validate edited candidates with workbook_validate before publish. workbook_edit accepts create_web_dashboard; remote web dashboards require an HTTPS extension_url and TABKIT_EXTENSION_SIGNING_KEY.".to_owned(),
             )
     }
 }

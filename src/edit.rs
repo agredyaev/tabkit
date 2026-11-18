@@ -5,8 +5,8 @@
 //! non-overlapping expected-source patches, applies them as one candidate, then
 //! reparses and checks operation-specific postconditions.
 //!
-//! The base workbook is never mutated. The API does not expose raw XML mutation;
-//! unsupported Tableau constructs are rejected instead of approximated.
+//! TabKit never mutates the base workbook. The API exposes no raw XML mutation;
+//! TabKit rejects unsupported Tableau constructs instead of approximating them.
 
 use crate::{
     Error, Result,
@@ -151,9 +151,9 @@ pub enum ActionTrigger {
 
 /// Dashboard-wide filter action using Tableau's `tsc:tsl-filter` contract.
 ///
-/// The source worksheet must already be placed on `dashboard`. It is excluded
-/// from its own action; other compatible worksheets on that dashboard are the
-/// action targets. This does not synthesize persisted `Apply to Worksheets` state.
+/// The source worksheet must already exist on `dashboard`. The action excludes
+/// its source worksheet and targets other compatible worksheets on that dashboard.
+/// TabKit does not synthesize persisted `Apply to Worksheets` state.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FilterActionSpec {
@@ -168,9 +168,9 @@ pub struct FilterActionSpec {
 
 /// Parameter action from one worksheet field instance to an existing parameter.
 ///
-/// The source worksheet must already be placed on `dashboard`. Source and target
-/// datatypes must match. `source_instance` is required only when the worksheet
-/// exposes multiple Tableau instances for the requested field.
+/// The source worksheet must already exist on `dashboard`. Source and target
+/// datatypes must match. Set `source_instance` only when the worksheet exposes
+/// multiple Tableau instances for the requested field.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ParameterActionSpec {
@@ -364,7 +364,7 @@ pub struct Receipt {
     pub dashboards: Vec<String>,
 }
 
-/// Detached candidate whose XML has been reparsed and whose edit postconditions hold.
+/// Candidate after XML reparse and successful edit postconditions.
 pub struct Candidate {
     pub workbook: Workbook,
     pub receipt: Receipt,
@@ -404,16 +404,14 @@ struct ZoneRenderer<'a> {
 ///
 /// # Invariants
 ///
-/// * every edit is validated against the same base plus explicitly planned
+/// * validation evaluates every edit against the same base plus explicitly planned
 ///   same-batch calculations;
-/// * generated patches are non-overlapping and satisfy expected-source
-///   preconditions;
+/// * generated patches do not overlap and satisfy expected-source preconditions;
 /// * the candidate remains within `max_bytes`;
-/// * the resulting XML is reparsed, and every created calculation, parameter,
-///   worksheet, action, and dashboard is checked before success is returned.
+/// * `apply` reparses the resulting XML and checks every created calculation,
+///   parameter, worksheet, action, and dashboard before success.
 ///
-/// Failure is atomic from the caller's perspective: no partially edited
-/// [`Workbook`] is returned and the input workbook is unchanged.
+/// On failure, `apply` returns no candidate and leaves the input workbook unchanged.
 pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate> {
     require(
         !batch.edits.is_empty(),

@@ -37,11 +37,11 @@ Default limits:
 
 TWBX admission rejects:
 
-- absolute/traversal/invalid entry paths;
+- absolute paths, traversal segments, backslashes, colons, NUL, and empty path segments;
 - duplicate or case-colliding names;
 - symlink entries;
-- expanded-size overflow;
-- suspicious compression ratio;
+- expanded data above 16 GiB;
+- an entry whose expanded size exceeds \`compressed_size * 5000 + 1 MiB\`;
 - zero or multiple embedded TWB files.
 
 ## Version gate
@@ -99,8 +99,8 @@ For TWBX candidates, only the embedded TWB is replaced. Unrelated entries must p
 - compression method;
 - compressed bytes.
 
-The source package hash is checked before and after candidate repack. A concurrent source change
-fails with `STALE_BASE`.
+TabKit checks the source package hash before and after candidate repack. A hash change fails with
+`STALE_BASE`.
 
 ## Candidate rule
 

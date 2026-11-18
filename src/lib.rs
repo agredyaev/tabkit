@@ -11,9 +11,9 @@
 //!
 //! # Mutation invariant
 //!
-//! Supported edits are expressed semantically, lowered to source-checked XML
-//! patches, and reparsed before a candidate is returned. Raw XML mutation is not
-//! exposed by the public edit API, and unrelated source regions are preserved.
+//! TabKit lowers supported semantic edits to source-checked XML patches, applies
+//! them, and reparses the candidate before returning it. The public edit API
+//! exposes no raw XML mutation. Patch verification preserves unrelated regions.
 //!
 //! # Error contract
 //!
@@ -33,13 +33,13 @@ mod text;
 pub mod workbook;
 pub mod xml;
 
-/// Tableau Server release against which version-dependent behavior is pinned.
+/// Tableau Server release for version-dependent behavior.
 pub const TABLEAU_PRODUCT_TARGET: &str = "2026.2.4";
-/// Only TWB `workbook/@version` value admitted by the semantic index.
+/// Only TWB `workbook/@version` value the semantic index accepts.
 pub const TWB_VERSION: &str = "26.2";
 /// Official external XSD contract corresponding to [`TWB_VERSION`].
 pub const TWB_XSD_VERSION: &str = "2026.2.0";
-/// Only Tableau REST API version accepted by [`rest::Config::validate`].
+/// Only Tableau REST API version [`rest::Config::validate`] accepts.
 pub const REST_API_VERSION: &str = "3.29";
 
 #[cfg(test)]
@@ -47,16 +47,16 @@ mod perf;
 
 use std::fmt;
 
-/// Result type used by TabKit public APIs.
+/// Result type for TabKit public APIs.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// TabKit failure with a stable classification and a concrete diagnostic.
+/// TabKit failure with a contract code and diagnostic text.
 ///
-/// The symbolic code is the API contract. The message may gain detail over time
-/// and must not be parsed by clients.
+/// The symbolic code is the API contract. Message text is diagnostic and is not
+/// a compatibility contract.
 #[derive(Debug)]
 pub struct Error {
-    /// Stable symbolic classification used by Rust and MCP clients.
+    /// Symbolic classification for Rust and MCP clients.
     pub code: &'static str,
     /// Diagnostic for the failed operation; must not contain secrets.
     pub message: String,
@@ -65,9 +65,8 @@ pub struct Error {
 impl Error {
     /// Constructs an error without transforming either part of the public contract.
     ///
-    /// Call sites choose a stable symbolic `code` and a concrete, secret-free
-    /// diagnostic. Transport adapters may classify the code further, but must
-    /// preserve it.
+    /// Call sites choose the symbolic `code` and a secret-free diagnostic.
+    /// Transport adapters classify the code further without changing it.
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -104,7 +103,7 @@ impl From<reqwest::Error> for Error {
                 "Tableau HTTP request timed out before completion",
             )
         } else if value.is_connect() {
-            Self::new("HTTP", "Could not connect to the configured Tableau server")
+            Self::new("HTTP", "Connection to the configured Tableau server failed")
         } else {
             Self::new(
                 "HTTP",
@@ -122,8 +121,8 @@ impl From<zip::result::ZipError> for Error {
 
 /// Enforces a caller-visible precondition without changing its error contract.
 ///
-/// On failure the supplied code and message are preserved exactly. Use this for
-/// expected admission/precondition failures rather than hidden runtime invariants.
+/// On failure, `require` preserves the supplied code and message. Use it for
+/// expected admission/precondition failures rather than runtime invariants.
 pub fn require(ok: bool, code: &'static str, message: impl Into<String>) -> Result<()> {
     if ok {
         Ok(())

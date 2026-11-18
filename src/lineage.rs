@@ -4,9 +4,9 @@
 //! proves a relationship. Unsupported, ambiguous, or partial provenance becomes
 //! an explicit [`Gap`]; TabKit never fills a gap with a guessed edge.
 //!
-//! SQL Server local `#temp` tables are connection-scoped. They may link Initial
-//! SQL producers to Custom SQL consumers only within the same Tableau connection;
-//! global temp tables are reported as unsupported coverage instead.
+//! SQL Server local `#temp` tables are connection-scoped. A local-temp read links
+//! an Initial SQL producer to a Custom SQL consumer only within the same Tableau
+//! connection. Global temp tables produce an unsupported-coverage gap.
 
 use crate::{
     Error, Result, formula,

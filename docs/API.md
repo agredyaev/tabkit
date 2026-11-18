@@ -48,7 +48,7 @@ TWB_XSD_VERSION        = 2026.2.0
 REST_API_VERSION       = 3.29
 ```
 
-These four values form one compatibility boundary.
+The four constants define one compatibility boundary.
 
 ## Rustdoc
 

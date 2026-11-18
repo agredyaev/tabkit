@@ -60,10 +60,10 @@ Downloads are streamed under the package file-size bound and hashed while writin
 | ZIP local-file header | TWBX |
 | other non-empty payload | TWB |
 
-Before the path is returned, the file passes the same [package admission](WORKBOOK.md#admission-limits)
-as a local workbook.
+Before returning the path, TabKit runs the same [package admission](WORKBOOK.md#admission-limits)
+as for a local workbook.
 
-MCP `workbook_open(workbook_id=...)` stores the downloaded file in TabKit's private workspace.
+MCP `workbook_open(workbook_id=...)` stores the downloaded file in a TabKit-owned temporary directory.
 
 ## Validation
 
@@ -81,7 +81,7 @@ acceptance is exercised by publish.
 
 ## Publish
 
-Publish starts from an admitted stable package snapshot.
+Publish starts from an admitted package snapshot whose SHA-256 was captured during admission.
 
 ```mermaid
 sequenceDiagram
@@ -97,8 +97,8 @@ sequenceDiagram
     S-->>T: publish/job response
 ```
 
-The source is hashed before upload and checked again after the upload stream. Concurrent modification
-fails with `STALE_BASE` before commit.
+TabKit hashes the source before upload and checks the hash again after streaming. A hash change fails
+with `STALE_BASE` before commit.
 
 `overwrite=false` is the default. Publish does not wait for background-job completion; use
 `tableau_job` / `Rest::job` with the returned job LUID.

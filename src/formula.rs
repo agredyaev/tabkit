@@ -4,8 +4,8 @@
 //! references. It does not parse or evaluate Tableau formula semantics; Tableau
 //! remains the semantic validation authority.
 //!
-//! External SQL/script/model-extension functions are rejected by the editing
-//! boundary rather than passed through as opaque executable content.
+//! The editing boundary rejects external SQL/script/model-extension functions
+//! instead of passing them through as opaque executable content.
 use crate::{Error, Result, require};
 use serde::Serialize;
 
@@ -187,9 +187,9 @@ pub fn analyze(source: &str) -> Result<Analysis> {
 
 /// Parses exactly one Tableau `[datasource].[field]` reference.
 ///
-/// Both components must be bracketed and the input may contain only surrounding
-/// whitespace. The returned field is normalized back to Tableau bracket syntax,
-/// including escaped closing brackets.
+/// Both components must be bracketed. Outside those components, the input accepts
+/// surrounding whitespace only. The function normalizes the returned field to
+/// Tableau bracket syntax, including escaped closing brackets.
 pub fn qualified(source: &str) -> Result<(String, String)> {
     let source = source.trim();
     require(

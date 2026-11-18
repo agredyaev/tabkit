@@ -10,7 +10,7 @@
 | Tableau REST | 3.29 |
 
 TabKit keeps a typed projection of the workbook objects required by its supported operations.
-It does not implement a complete Tableau object model or a second XSD validator.
+TabKit does not implement a complete Tableau object model or a second XSD validator.
 
 ## Runtime
 
@@ -95,9 +95,8 @@ flowchart LR
     worksheet -->|placed on dashboard| dashboard
 ```
 
-A worksheet is the visualization-level node. TabKit records that a field is used by a worksheet and
-that the worksheet is placed on a dashboard. It does not currently identify the specific worksheet
-encoding/shelf such as Rows, Columns, Color, Label, or Tooltip.
+The graph stops at worksheet usage. It records field -> worksheet and worksheet -> dashboard edges.
+Lineage does not identify Rows, Columns, Color, Label, Tooltip, or another worksheet encoding.
 
 ### SQL coverage
 
@@ -113,8 +112,8 @@ encoding/shelf such as Rows, Columns, Color, Label, or Tooltip.
 Supported SQL Server local-temp patterns include `SELECT ... INTO #temp` and
 `CREATE TABLE #temp` + `INSERT ... SELECT`, including chained local temp tables.
 
-Exact-origin edges take precedence over coarse datasource containment during trace traversal, preventing
-unrelated SQL relations in the same datasource from contaminating one another's lineage.
+During trace traversal, an exact-origin edge replaces the coarse datasource path for that field.
+Unrelated SQL relations in the same datasource therefore stay out of the trace.
 
 ## Authoring model
 
@@ -151,6 +150,6 @@ Measurements: [Performance](PERFORMANCE.md).
 - Tableau Desktop automation;
 - complete Tableau XML object model;
 - local replacement for Tableau XSD/semantic validation;
-- generic raw XML mutation;
+- raw XML mutation API;
 - Tableau calculation execution;
 - server metadata/governance replacement.

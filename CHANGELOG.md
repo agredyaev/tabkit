@@ -2,7 +2,7 @@
 
 ## 0.9.0 - 2026-11-18
 
-First release of the current Tableau 2026.2.4 implementation.
+First release of the Tableau 2026.2.4 implementation.
 
 ### Runtime
 
@@ -29,7 +29,7 @@ First release of the current Tableau 2026.2.4 implementation.
 ### Web-dashboard runtime
 
 - standalone `tabkit-extension-host`;
-- stable `host.html` entry point;
+- one `host.html` entry point for the extension runtime;
 - HMAC-SHA256 signed workbook bundles;
 - URL validation, HTML sanitization, sandbox/CSP isolation;
 - bounded Tableau bridge requests and paged data reads.
