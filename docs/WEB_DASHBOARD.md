@@ -2,107 +2,177 @@
 
 TapKit web dashboards use one Tableau Dashboard Extension object as the presentation surface.
 
-```text
-Tableau workbook
-  -> datasource(s)
-  -> dashboard
-       -> TapKit Web Dashboard extension
-            -> sandboxed HTML/CSS/JavaScript
-```
+    Tableau workbook
+      -> datasource(s)
+      -> dashboard
+           -> TapKit Web Dashboard extension
+                -> signed HTML/CSS/JavaScript bundle
 
-The web-dashboard path does not use TapKit's native dashboard row/column layout compiler. Tableau still owns the workbook, data sources, permissions, parameters, publish lifecycle, and extension host. HTML/CSS/JavaScript owns presentation and local interaction.
+The web-dashboard path does not use the native row/column dashboard compiler. Tableau still owns the workbook, data sources, permissions, parameters, publish lifecycle, and extension zone. HTML/CSS/JavaScript owns presentation and local interaction.
+
+## Stable host URL
+
+All compatible dashboards use one stable URL, for example:
+
+    https://bi.example.com/tapkit/host.html
+
+Do not create a different URL for each dashboard and do not version the public path for normal runtime changes.
+
+The bundle itself contains:
+
+    runtime_version = 1
+
+Future host releases can keep supporting older runtime versions at the same host.html URL.
 
 ## Extension runtime
 
-The static extension host is under `extension/`:
+The production runtime is delivered as a dedicated binary:
 
-```text
-extension/
-  tapkit-web-dashboard.trex
-  host.html
-  host.css
-  host.js
-  vendor/
-    tableau.extensions.1.latest.min.js
-```
+    tabkit-extension-host
+
+It embeds:
+
+    host.html
+    host.css
+    host.js
+    vendor/tableau.extensions.1.17.0.min.js
+
+The source files remain under extension/ for development and review.
 
 For local development:
 
-```sh
-python -m http.server 8765 --directory extension
-```
+    python -m http.server 8765 --directory extension
 
-The development manifest points to `http://localhost:8765/host.html`. Remote deployment requires HTTPS. Tableau Server/Cloud may also require extensions to be enabled and the host to be safe-listed.
+The development manifest points to:
+
+    http://localhost:8765/host.html
+
+Remote production deployment requires HTTPS.
+
+See EXTENSION_DEPLOYMENT.md for the full Windows/Linux deployment and Tableau Server configuration procedure.
 
 ## Authoring contract
 
-`create_web_dashboard` creates a fixed-size dashboard containing one full-canvas TapKit Dashboard Extension object.
+create_web_dashboard creates a fixed-size dashboard containing one full-canvas TapKit Dashboard Extension object.
 
-```json
-{
-  "op": "create_web_dashboard",
-  "name": "Executive Overview",
-  "width": 1440,
-  "height": 900,
-  "extension_url": "https://bi.example.com/tapkit/host.html",
-  "html": "<main id=\"app\"></main>",
-  "css": "#app { width: 100vw; height: 100vh; }",
-  "javascript": "const sources = await tapkit.listDataSources();"
-}
-```
+Example request:
 
-`extension_url` must use HTTPS. HTTP is accepted only for localhost development.
+    {
+      "op": "create_web_dashboard",
+      "name": "Executive Overview",
+      "width": 1440,
+      "height": 900,
+      "extension_url": "https://bi.example.com/tapkit/host.html",
+      "html": "<main id=\"app\"></main>",
+      "css": "#app { width: 100vw; height: 100vh; }",
+      "javascript": "const sources = await tapkit.listDataSources();"
+    }
 
-HTML, CSS, and JavaScript are serialized as UTF-8 JSON, base64 encoded, and persisted in extension instance settings under `tapkit.bundle_b64`. The combined unencoded payload is limited to 1 MiB.
+extension_url must be a valid absolute URL. Remote URLs must use HTTPS. HTTP is accepted only for localhost, 127.0.0.1, or ::1. User-info URLs, malformed hostless URLs, and fragments are rejected.
 
-## Sandbox boundary
+HTML, CSS, and JavaScript are serialized as UTF-8 JSON with runtime_version, base64 encoded, and persisted under:
 
-Generated code runs in an iframe with `sandbox="allow-scripts"`. It is not granted same-origin access. The child CSP denies network, object, frame, form, and base-URI access. Generated code cannot call `tableau.extensions` directly.
+    tapkit.bundle_b64
 
-The trusted host exposes a narrow message bridge as `window.tapkit`.
+Production also stores:
+
+    tapkit.bundle_mac
+
+The unencoded HTML/CSS/JavaScript payload is limited to 1 MiB. The serialized bundle is limited separately before it reaches the runtime.
+
+## Bundle signing
+
+Remote production authoring requires:
+
+    TABKIT_EXTENSION_SIGNING_KEY
+
+The value is base64 for exactly 32 random bytes.
+
+TapKit signs the exact serialized bundle with HMAC-SHA256. tabkit-extension-host receives the same key and verifies the MAC through its same-origin /verify endpoint before host.js decodes or executes the dashboard.
+
+This prevents a workbook author from editing tapkit.bundle_b64 and running arbitrary unsigned JavaScript under a safe-listed TapKit extension URL.
+
+Unsigned bundles are accepted only for loopback development.
+
+## Sandbox and browser boundary
+
+After signature verification:
+
+1. host.js decodes and validates the versioned bundle;
+2. raw HTML is parsed and sanitized;
+3. script, iframe, frame, object, embed, link, meta, base, and form nodes are removed;
+4. inline event-handler and navigation-capable attributes are removed;
+5. CSS is escaped so it cannot terminate the trusted style element;
+6. the result is loaded into an iframe with sandbox="allow-scripts";
+7. generated JavaScript runs after the trusted child bridge bootstrap.
+
+The child is not granted same-origin access and does not receive tableau.extensions directly.
+
+The child CSP denies external connections and external subresources. Navigation is also canceled where the browser Navigation API exposes a cancelable event.
+
+The iframe/CSP layer is defense in depth, not the primary trust boundary. CSP cannot universally prohibit every document-navigation path in every browser. Production safety therefore depends on executing only bundles signed by the trusted TapKit authoring path.
 
 ## Bridge API
 
 Data-source access works without hidden worksheet zones:
 
-```text
-listDataSources()
-listLogicalTables(datasource)
-getLogicalTableData(datasource, table, maxRows?)
-```
+    listDataSources()
+    listLogicalTables(datasource)
+    getLogicalTableData(datasource, table, maxRows?)
 
-Logical-table reads are capped at 100,000 rows per request. They use Tableau full-data APIs, so the extension manifest declares `full data` permission and the user still needs the corresponding Tableau permission.
+Logical-table reads use Tableau full-data APIs. The extension manifest therefore declares Full Data Access and Tableau still enforces user/workbook/data-source permissions.
 
-Hybrid dashboards may also use worksheet APIs when worksheets are present on the dashboard:
+Hybrid dashboards may also use:
 
-```text
-listWorksheets()
-getSummaryData(worksheet, maxRows?)
-applyFilter(worksheet, field, values)
-clearFilter(worksheet, field)
-```
+    listWorksheets()
+    getSummaryData(worksheet, maxRows?)
+    applyFilter(worksheet, field, values)
+    clearFilter(worksheet, field)
 
 Parameter access:
 
-```text
-listParameters()
-setParameter(name, value)
-```
+    listParameters()
+    setParameter(name, value)
 
-Generated code can subscribe through `tapkit.on(event, handler)`. Current emitted worksheet events are filter, mark-selection, and summary-data changes when worksheets exist on the dashboard.
+Events:
+
+    tapkit.on("filterChanged", handler)
+    tapkit.on("selectionChanged", handler)
+    tapkit.on("summaryDataChanged", handler)
+
+## Runtime limits
+
+Current runtime limits include:
+
+- 100,000 rows per data request;
+- 8 MiB approximate returned row-data budget;
+- 16 MiB maximum bridge response serialization;
+- 64 KiB maximum bridge request serialization;
+- four concurrent bridge requests;
+- 30 second host-side bridge timeout;
+- 35 second child-side request timeout;
+- 1 MiB HTML/CSS/JavaScript payload;
+- 2 MiB serialized bundle.
+
+Summary data is read page-by-page. The runtime no longer calls getAllPagesAsync before applying its row limit.
 
 ## Security invariants
 
-- generated code never receives the Tableau Extensions API object;
-- child network access is denied by CSP;
-- the extension URL is HTTPS except for loopback development;
-- inline payload size is bounded before workbook mutation;
-- Tableau full-data permission remains explicit in the extension manifest;
-- workbook XML stores only base64-encoded bundle bytes, not executable XML fragments;
-- Tableau `validateWorkbook` remains the workbook validation authority.
+- remote extension URLs require HTTPS;
+- production bundles require a valid signature;
+- the signing key is not stored in the workbook or browser;
+- generated code does not receive tableau.extensions;
+- Tableau access is limited to the explicit bridge allowlist;
+- bridge request size, response size, concurrency, timeout, row count, and data bytes are bounded;
+- generated HTML is sanitized before it is placed in the child document;
+- the child has no same-origin permission;
+- external fetch/XHR/WebSocket and external subresources are denied by child CSP;
+- the host emits CSP, nosniff, no-referrer, no-store, and restrictive Permissions-Policy headers;
+- Tableau Full Data Access remains explicit in the manifest and safe-list configuration;
+- Tableau validateWorkbook remains the final workbook validation authority.
 
 ## Native authoring
 
-Native Tableau authoring remains available for workbooks that require ordinary editable Tableau worksheets, native dashboard layout, filter cards, or native actions.
+Native Tableau authoring remains available for workbooks that require editable Tableau worksheets, native dashboard layout, filter cards, or native actions.
 
-The web-dashboard path is the preferred path when the dashboard is intentionally one custom HTML/JavaScript application.
+The web-dashboard path is intended for dashboards whose presentation surface is one custom web application.

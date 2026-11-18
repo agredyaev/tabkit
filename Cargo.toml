@@ -14,6 +14,7 @@ publish = false
 axum = "0.8.9"
 base64 = "0.23.1"
 hex = "0.4.3"
+hmac = "0.13.0"
 clap = { version = "4.6.8", features = ["derive", "env"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "multipart", "rustls"] }
 rmcp = { version = "3.11.0", features = ["server", "macros", "schemars", "transport-io", "transport-streamable-http-server"] }
@@ -34,6 +35,10 @@ tower = { version = "0.5.3", features = ["util"] }
 [[bin]]
 name = "tabkit-mcp"
 path = "src/mcp_main.rs"
+
+[[bin]]
+name = "tabkit-extension-host"
+path = "src/extension_host_main.rs"
 
 [profile.release]
 lto = "thin"

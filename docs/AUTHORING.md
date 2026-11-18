@@ -138,11 +138,13 @@ Example:
 
 `create_web_dashboard` creates a fixed-size Tableau dashboard whose presentation surface is one full-canvas TapKit Dashboard Extension.
 
-HTML, CSS, and JavaScript are stored as a base64-encoded UTF-8 JSON bundle in the extension instance setting `tapkit.bundle_b64`. The unencoded payload is limited to 1 MiB.
+HTML, CSS, and JavaScript are stored as a versioned base64-encoded UTF-8 JSON bundle in `tapkit.bundle_b64`. Runtime version 1 is current. The unencoded HTML/CSS/JavaScript payload is limited to 1 MiB and the serialized bundle is bounded separately.
 
-The default development host is `http://localhost:8765/host.html`. Remote `extension_url` values must use HTTPS.
+Remote production authoring requires `TABKIT_EXTENSION_SIGNING_KEY`, a base64 32-byte key. TapKit stores an HMAC-SHA256 under `tapkit.bundle_mac`; the extension host verifies it before execution. Unsigned bundles are accepted only for localhost development.
 
-Generated code runs in a sandboxed iframe and receives the narrow `window.tapkit` bridge instead of direct access to `tableau.extensions`. Data-source reads use Tableau full-data APIs; worksheet summary/filter methods remain available for hybrid dashboards.
+The default development host is `http://localhost:8765/host.html`. Remote `extension_url` values must be valid absolute HTTPS URLs. User-info and malformed hostless URLs are rejected.
+
+Generated code runs in a sanitized sandboxed iframe and receives the narrow `window.tapkit` bridge instead of direct access to `tableau.extensions`. Data-source reads use Tableau Full Data Access APIs; worksheet summary/filter methods remain available for hybrid dashboards.
 
 Example:
 
@@ -159,7 +161,7 @@ Example:
 }
 ```
 
-See [Web dashboard extension](WEB_DASHBOARD.md) for the runtime, bridge, deployment, and security contract.
+See [Web dashboard extension](WEB_DASHBOARD.md) for the runtime and bridge contract and [Extension deployment](EXTENSION_DEPLOYMENT.md) for production setup.
 
 ## Composition
 

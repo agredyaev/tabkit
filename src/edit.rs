@@ -10,7 +10,9 @@
 //! approximated.
 
 use crate::{
-    Error, Result, formula,
+    Error, Result,
+    extension_security::{EXTENSION_SIGNING_KEY_ENV, sign_bundle, signing_key_from_env},
+    formula,
     patch::{self, Patch},
     require,
     workbook::{DataType, DatasourceId, FieldType, Role, Workbook, WorksheetId},
@@ -29,7 +31,9 @@ use std::{
 const CANVAS: u32 = 100_000;
 const WEB_EXTENSION_ID: &str = "io.tapkit.web-dashboard";
 const WEB_EXTENSION_VERSION: &str = "0.1.0";
+const WEB_DASHBOARD_RUNTIME_VERSION: u32 = 1;
 const WEB_DASHBOARD_MAX_INLINE_BYTES: usize = 1024 * 1024;
+const WEB_DASHBOARD_MAX_BUNDLE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Atomic semantic edit plan evaluated against one workbook base.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1834,13 +1838,34 @@ fn web_dashboard_parts(
             "Inline HTML, CSS, and JavaScript must be <= {WEB_DASHBOARD_MAX_INLINE_BYTES} bytes"
         ),
     )?;
-    validate_web_extension_url(&spec.extension_url)?;
+    let local_extension = validate_web_extension_url(&spec.extension_url)?;
 
     let bundle = serde_json::to_vec(&serde_json::json!({
+        "runtime_version": WEB_DASHBOARD_RUNTIME_VERSION,
         "html": spec.html,
         "css": spec.css,
         "javascript": spec.javascript,
     }))?;
+    require(
+        bundle.len() <= WEB_DASHBOARD_MAX_BUNDLE_BYTES,
+        "WEB_DASHBOARD",
+        format!(
+            "Serialized web dashboard bundle must be <= {WEB_DASHBOARD_MAX_BUNDLE_BYTES} bytes"
+        ),
+    )?;
+    let signing_key = signing_key_from_env(EXTENSION_SIGNING_KEY_ENV)?;
+    let bundle_mac = match signing_key {
+        Some(key) => sign_bundle(&bundle, &key)?,
+        None if local_extension => String::new(),
+        None => {
+            return Err(Error::new(
+                "WEB_DASHBOARD_SIGNING",
+                format!(
+                    "{EXTENSION_SIGNING_KEY_ENV} is required for remote web dashboard authoring"
+                ),
+            ));
+        }
+    };
     let bundle_b64 = BASE64.encode(bundle);
 
     let root_id = take_id(next_id)?;
@@ -1857,7 +1882,7 @@ fn web_dashboard_parts(
         spec.extension_url
     );
     let dashboard = format!(
-        "\n    <dashboard enable-sort-zone-taborder=\"true\" name=\"{}\">\n      <style/>\n      <size maxheight=\"{}\" maxwidth=\"{}\" minheight=\"{}\" minwidth=\"{}\" sizing-mode=\"fixed\"/>\n      <zones>\n        <zone h=\"{CANVAS}\" id=\"{root_id}\" type-v2=\"layout-basic\" w=\"{CANVAS}\" x=\"0\" y=\"0\">\n          <zone forceUpdate=\"true\" h=\"{CANVAS}\" id=\"{extension_id}\" param=\"{}\" type=\"dashboard-object\" w=\"{CANVAS}\" x=\"0\" y=\"0\">\n            <add-in add-in-id=\"{WEB_EXTENSION_ID}\" extension-url=\"{}\" extension-version=\"{WEB_EXTENSION_VERSION}\" instance-id=\"{}\">\n              <instance-settings><setting key=\"tapkit.bundle_b64\" value=\"{}\"/></instance-settings>\n              <type-settings><dashboard/></type-settings>\n            </add-in>\n          </zone>\n        </zone>\n      </zones>\n      <simple-id uuid=\"{}\"/>\n    </dashboard>",
+        "\n    <dashboard enable-sort-zone-taborder=\"true\" name=\"{}\">\n      <style/>\n      <size maxheight=\"{}\" maxwidth=\"{}\" minheight=\"{}\" minwidth=\"{}\" sizing-mode=\"fixed\"/>\n      <zones>\n        <zone h=\"{CANVAS}\" id=\"{root_id}\" type-v2=\"layout-basic\" w=\"{CANVAS}\" x=\"0\" y=\"0\">\n          <zone forceUpdate=\"true\" h=\"{CANVAS}\" id=\"{extension_id}\" param=\"{}\" type=\"dashboard-object\" w=\"{CANVAS}\" x=\"0\" y=\"0\">\n            <add-in add-in-id=\"{WEB_EXTENSION_ID}\" extension-url=\"{}\" extension-version=\"{WEB_EXTENSION_VERSION}\" instance-id=\"{}\">\n              <instance-settings><setting key=\"tapkit.bundle_b64\" value=\"{}\"/><setting key=\"tapkit.bundle_mac\" value=\"{}\"/></instance-settings>\n              <type-settings><dashboard/></type-settings>\n            </add-in>\n          </zone>\n        </zone>\n      </zones>\n      <simple-id uuid=\"{}\"/>\n    </dashboard>",
         escape_attr(&spec.name),
         spec.height,
         spec.width,
@@ -1867,6 +1892,7 @@ fn web_dashboard_parts(
         escape_attr(&spec.extension_url),
         escape_attr(&instance_id),
         escape_attr(&bundle_b64),
+        escape_attr(&bundle_mac),
         dashboard_uuid,
     );
     let window = format!(
@@ -1882,32 +1908,56 @@ fn web_dashboard_parts(
     })
 }
 
-fn validate_web_extension_url(url: &str) -> Result<()> {
+fn validate_web_extension_url(url: &str) -> Result<bool> {
     require(
         !url.is_empty() && url.len() <= 2048,
         "WEB_DASHBOARD",
         "extension_url must be 1..2048 bytes",
     )?;
-    let lower = url.to_ascii_lowercase();
-    let secure = lower
-        .strip_prefix("https://")
-        .is_some_and(|rest| !rest.is_empty());
-    let localhost = lower
-        .strip_prefix("http://")
-        .and_then(|rest| rest.split(['/', '?', '#']).next())
-        .is_some_and(|authority| {
-            authority == "localhost"
-                || authority.starts_with("localhost:")
-                || authority == "127.0.0.1"
-                || authority.starts_with("127.0.0.1:")
-                || authority == "[::1]"
-                || authority.starts_with("[::1]:")
-        });
     require(
-        secure || localhost,
+        url.trim() == url && !url.chars().any(char::is_control),
+        "WEB_DASHBOARD",
+        "extension_url must not contain surrounding whitespace or control characters",
+    )?;
+    let (raw_scheme, raw_rest) = url.split_once("://").ok_or_else(|| {
+        Error::new(
+            "WEB_DASHBOARD",
+            "extension_url must contain an explicit URL scheme and authority",
+        )
+    })?;
+    require(
+        matches!(raw_scheme.to_ascii_lowercase().as_str(), "http" | "https")
+            && !raw_rest.is_empty()
+            && !raw_rest.starts_with(['/', '?', '#', '\\']),
+        "WEB_DASHBOARD",
+        "extension_url must contain a non-empty authority",
+    )?;
+    let parsed = reqwest::Url::parse(url).map_err(|error| {
+        Error::new(
+            "WEB_DASHBOARD",
+            format!("extension_url is not a valid absolute URL: {error}"),
+        )
+    })?;
+    require(
+        parsed.username().is_empty() && parsed.password().is_none(),
+        "WEB_DASHBOARD",
+        "extension_url must not contain user information",
+    )?;
+    require(
+        parsed.fragment().is_none(),
+        "WEB_DASHBOARD",
+        "extension_url must not contain a fragment",
+    )?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| Error::new("WEB_DASHBOARD", "extension_url must contain a host"))?;
+    let localhost = host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1";
+    require(
+        parsed.scheme() == "https" || (parsed.scheme() == "http" && localhost),
         "WEB_DASHBOARD",
         "extension_url must use HTTPS; HTTP is accepted only for localhost",
-    )
+    )?;
+    Ok(localhost)
 }
 
 fn web_extension_reference_patch(book: &Workbook, specs: &[&WebDashboardSpec]) -> Result<Patch> {
@@ -2034,6 +2084,7 @@ fn web_dashboard_postcondition(book: &Workbook, name: &str) -> Result<bool> {
         .ok_or_else(|| Error::new("INTERNAL", "Dashboard id is invalid"))?;
     let mut add_in = false;
     let mut bundle = false;
+    let mut bundle_mac = false;
     for node in book.xml.descendants(dashboard.node) {
         match book.xml.tag(node) {
             "add-in" => {
@@ -2043,15 +2094,15 @@ fn web_dashboard_postcondition(book: &Workbook, name: &str) -> Result<bool> {
                     .is_some_and(|id| id.as_ref() == WEB_EXTENSION_ID);
             }
             "setting" => {
-                bundle |= book
-                    .xml
-                    .attr(node, "key")?
-                    .is_some_and(|key| key.as_ref() == "tapkit.bundle_b64");
+                if let Some(key) = book.xml.attr(node, "key")? {
+                    bundle |= key.as_ref() == "tapkit.bundle_b64";
+                    bundle_mac |= key.as_ref() == "tapkit.bundle_mac";
+                }
             }
             _ => {}
         }
     }
-    Ok(add_in && bundle && tapkit_referenced_extension(book)?.is_some())
+    Ok(add_in && bundle && bundle_mac && tapkit_referenced_extension(book)?.is_some())
 }
 
 fn dashboard_parts<'a>(
@@ -4335,6 +4386,7 @@ mod tests {
             .decode(encoded.as_bytes())
             .map_err(|_| Error::new("TEST", "web dashboard bundle is not base64"))?;
         let bundle: serde_json::Value = serde_json::from_slice(&decoded)?;
+        assert_eq!(bundle["runtime_version"], WEB_DASHBOARD_RUNTIME_VERSION);
         assert_eq!(bundle["html"], html);
         assert_eq!(bundle["css"], css);
         assert_eq!(bundle["javascript"], javascript);
@@ -4368,5 +4420,22 @@ mod tests {
         };
         assert_eq!(error.code, "WEB_DASHBOARD");
         Ok(())
+    }
+
+    #[test]
+    fn rejects_extension_url_userinfo_bypass() {
+        for url in [
+            "http://localhost:@evil.example/host.html",
+            "http://127.0.0.1:@evil.example/host.html",
+        ] {
+            assert!(validate_web_extension_url(url).is_err(), "{url}");
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_extension_urls() {
+        for url in ["https://?x", "https:///host.html"] {
+            assert!(validate_web_extension_url(url).is_err(), "{url}");
+        }
     }
 }

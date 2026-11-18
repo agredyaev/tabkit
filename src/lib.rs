@@ -22,6 +22,7 @@
 //! operation without exposing credentials or raw upstream payloads.
 
 pub mod edit;
+pub mod extension_security;
 pub mod formula;
 pub mod lineage;
 pub mod mcp;

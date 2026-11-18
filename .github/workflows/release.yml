@@ -8,48 +8,67 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  PACKAGE_VERSION: "0.9.0"
+
 jobs:
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.platform }}-x64)
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
-            artifact: tabkit-linux-x64
+            platform: linux
           - os: windows-2025
-            artifact: tabkit-windows-x64
+            platform: windows
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Verify release tag
+        if: runner.os != 'Windows'
+        shell: bash
+        run: test "${GITHUB_REF_NAME}" = "v${PACKAGE_VERSION}"
+
+      - name: Verify release tag
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_NAME -ne "v$env:PACKAGE_VERSION") {
+            throw "Tag $env:GITHUB_REF_NAME does not match package version $env:PACKAGE_VERSION"
+          }
+
       - run: cargo test --release --locked --all-targets
-      - run: cargo build --release --locked --bin tabkit --bin tabkit-mcp
-      - name: Package Unix
+      - run: cargo build --release --locked --bin tabkit --bin tabkit-mcp --bin tabkit-extension-host
+
+      - name: Package Linux
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          mkdir -p dist
-          cp target/release/tabkit target/release/tabkit-mcp README.md LICENSE dist/
-          tar -czf "${{ matrix.artifact }}.tar.gz" -C dist .
+          zip -j "tabkit-v${PACKAGE_VERSION}-${{ matrix.platform }}-x64.zip" target/release/tabkit README.md LICENSE
+          zip -j "tabkit-mcp-v${PACKAGE_VERSION}-${{ matrix.platform }}-x64.zip" target/release/tabkit-mcp README.md LICENSE
+          zip -j "tabkit-extension-host-v${PACKAGE_VERSION}-${{ matrix.platform }}-x64.zip" target/release/tabkit-extension-host README.md LICENSE docs/EXTENSION_DEPLOYMENT.md
+
       - name: Package Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/tabkit.exe dist/
-          Copy-Item target/release/tabkit-mcp.exe dist/
-          Copy-Item README.md dist/
-          Copy-Item LICENSE dist/
-          Compress-Archive -Path dist/* -DestinationPath "${{ matrix.artifact }}.zip"
+          Compress-Archive -Path @("target/release/tabkit.exe","README.md","LICENSE") -DestinationPath "tabkit-v$env:PACKAGE_VERSION-${{ matrix.platform }}-x64.zip"
+          Compress-Archive -Path @("target/release/tabkit-mcp.exe","README.md","LICENSE") -DestinationPath "tabkit-mcp-v$env:PACKAGE_VERSION-${{ matrix.platform }}-x64.zip"
+          Compress-Archive -Path @("target/release/tabkit-extension-host.exe","README.md","LICENSE","docs/EXTENSION_DEPLOYMENT.md") -DestinationPath "tabkit-extension-host-v$env:PACKAGE_VERSION-${{ matrix.platform }}-x64.zip"
+
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: ${{ matrix.artifact }}
+          name: release-${{ matrix.platform }}-x64
           path: |
-            ${{ matrix.artifact }}.tar.gz
-            ${{ matrix.artifact }}.zip
-          if-no-files-found: ignore
+            tabkit-v${{ env.PACKAGE_VERSION }}-${{ matrix.platform }}-x64.zip
+            tabkit-mcp-v${{ env.PACKAGE_VERSION }}-${{ matrix.platform }}-x64.zip
+            tabkit-extension-host-v${{ env.PACKAGE_VERSION }}-${{ matrix.platform }}-x64.zip
+          if-no-files-found: error
 
   release:
     name: GitHub release

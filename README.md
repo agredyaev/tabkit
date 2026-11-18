@@ -10,7 +10,7 @@ Version: **0.9.0**
 - Tableau product target: **2026.2.4**
 - Tableau REST API: **3.29**
 - Tableau workbook XSD contract: **2026.2.0**
-- Rust: **1.88+**
+- Rust: **1.89+**
 
 TapKit does not ship a second Tableau schema validator. It keeps a small typed projection of the workbook objects required for inspection, lineage, and supported edits. Final workbook validation is delegated to Tableau REST `validateWorkbook`.
 
@@ -25,7 +25,7 @@ TapKit supports:
 - calculation and parameter creation;
 - basic bar, line, KPI, and text-table worksheet creation from existing datasource fields;
 - dashboard creation from existing worksheets;
-- full-screen HTML/CSS/JavaScript web dashboards through the bundled Dashboard Extension host;
+- full-screen HTML/CSS/JavaScript web dashboards through the signed, standalone Dashboard Extension host;
 - dashboard filter actions and parameter actions;
 - dashboard layout, filter cards, and bounded presentation styling;
 - Tableau workbook search and download;
@@ -37,10 +37,11 @@ TapKit does not automate Tableau Desktop.
 
 ## Binaries
 
-The repository builds two binaries:
+The repository builds three binaries:
 
 - `tabkit` — CLI;
-- `tabkit-mcp` — MCP server.
+- `tabkit-mcp` — MCP server;
+- `tabkit-extension-host` — embedded Tableau Dashboard Extension web host.
 
 ## Build
 
@@ -70,9 +71,10 @@ Outputs:
 ```text
 target\release\tabkit.exe
 target\release\tabkit-mcp.exe
+target\release\tabkit-extension-host.exe
 ```
 
-CI also publishes a `tabkit-windows-x64` artifact for each successful `main` build. The archive includes the `extension/` directory with the TapKit Web Dashboard `.trex` and static host runtime.
+CI publishes separate versioned ZIP artifacts for Linux and Windows, including `tabkit-mcp-v0.9.0-<platform>-x64.zip` and `tabkit-extension-host-v0.9.0-<platform>-x64.zip`. The extension-host binary embeds its browser assets.
 
 ## Tableau configuration
 
@@ -204,7 +206,7 @@ When a new object depends on another object created by TapKit, chain `workbook_e
 ## Current limits
 
 - worksheet authoring is limited to bar, line, KPI, and text-table views over existing fields;
-- web dashboards require the TapKit extension host; remote hosts must use HTTPS and Tableau may require safe-listing/full-data permission;
+- web dashboards require `tabkit-extension-host`; remote authoring also requires `TABKIT_EXTENSION_SIGNING_KEY`, HTTPS, Tableau safe-listing, and Full Data Access for direct datasource reads;
 - arbitrary raw XML mutation is not exposed;
 - action authoring is limited to filter actions and parameter actions;
 - full action/set/story lineage is not implemented;
@@ -236,6 +238,7 @@ Technical documentation is under [`docs/`](docs/README.md):
 - [Authoring](docs/AUTHORING.md)
 - [Dashboard authoring](docs/DASHBOARD.md)
 - [Web dashboard extension](docs/WEB_DASHBOARD.md)
+- [Extension deployment](docs/EXTENSION_DEPLOYMENT.md)
 - [Performance](docs/PERFORMANCE.md)
 - [Rust API map](docs/API.md)
 - [Error contract](docs/ERRORS.md)

@@ -2,14 +2,27 @@
   "use strict";
 
   const CHANNEL = "tapkit-web-dashboard";
-  const VERSION = 1;
-  const MAX_SUMMARY_ROWS = 100000;
+  const BRIDGE_VERSION = 1;
+  const RUNTIME_VERSION = 1;
+  const MAX_ROWS = 100000;
   const MAX_INLINE_BYTES = 1024 * 1024;
+  const MAX_BUNDLE_BYTES = 2 * 1024 * 1024;
+  const MAX_BUNDLE_B64_BYTES = Math.ceil(MAX_BUNDLE_BYTES / 3) * 4 + 8;
+  const MAX_RPC_REQUEST_BYTES = 64 * 1024;
+  const MAX_RPC_RESPONSE_BYTES = 16 * 1024 * 1024;
+  const MAX_DATA_BYTES = 8 * 1024 * 1024;
+  const MAX_IN_FLIGHT = 4;
+  const RPC_TIMEOUT_MS = 30000;
+  const CHILD_RPC_TIMEOUT_MS = 35000;
 
   const frame = document.getElementById("dashboard");
   const status = document.getElementById("status");
-
   const encoder = new TextEncoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const nonce = Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) =>
+    value.toString(16).padStart(8, "0")
+  ).join("");
+  let inFlight = 0;
 
   function fail(message) {
     status.className = "error";
@@ -22,31 +35,134 @@
     return tableau.extensions.settings.get(name) || "";
   }
 
-  function inlineSize(parts) {
-    return parts.reduce((sum, part) => sum + encoder.encode(part).byteLength, 0);
+  function byteSize(value) {
+    return encoder.encode(value).byteLength;
+  }
+
+  function jsonByteSize(value) {
+    return byteSize(JSON.stringify(value));
+  }
+
+  function isLoopbackHost() {
+    const host = location.hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  }
+
+  async function verifyBundle(bundleB64, mac) {
+    if (!mac && isLoopbackHost()) return;
+    if (!mac) throw new Error("TapKit dashboard signature is missing");
+
+    let response;
+    try {
+      response = await fetch("./verify", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bundle_b64: bundleB64, mac }),
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        referrerPolicy: "no-referrer"
+      });
+    } catch {
+      throw new Error("TapKit dashboard signature verification endpoint is unavailable");
+    }
+    if (response.status !== 204) {
+      throw new Error("TapKit dashboard signature verification failed");
+    }
   }
 
   function decodeBundle(value) {
     if (!value) throw new Error("TapKit extension setting tapkit.bundle_b64 is missing");
+    if (value.length > MAX_BUNDLE_B64_BYTES) {
+      throw new Error("TapKit dashboard bundle exceeds the encoded runtime limit");
+    }
+
     let binary;
     try {
       binary = atob(value);
     } catch {
       throw new Error("TapKit dashboard bundle is not valid base64");
     }
+    if (binary.length > MAX_BUNDLE_BYTES) {
+      throw new Error("TapKit dashboard bundle exceeds the decoded runtime limit");
+    }
+
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
     let parsed;
     try {
-      parsed = JSON.parse(new TextDecoder().decode(bytes));
+      parsed = JSON.parse(decoder.decode(bytes));
     } catch {
       throw new Error("TapKit dashboard bundle is not valid UTF-8 JSON");
     }
-    if (!parsed || typeof parsed !== "object") throw new Error("TapKit dashboard bundle is invalid");
-    return {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("TapKit dashboard bundle is invalid");
+    }
+    const keys = Object.keys(parsed);
+    if (keys.some((key) => !["runtime_version", "html", "css", "javascript"].includes(key))) {
+      throw new Error("TapKit dashboard bundle contains unsupported fields");
+    }
+    if (parsed.runtime_version !== RUNTIME_VERSION) {
+      throw new Error(
+        `Unsupported TapKit dashboard runtime version ${JSON.stringify(parsed.runtime_version)}; host supports ${RUNTIME_VERSION}`
+      );
+    }
+
+    const bundle = {
+      runtimeVersion: parsed.runtime_version,
       html: typeof parsed.html === "string" ? parsed.html : "",
       css: typeof parsed.css === "string" ? parsed.css : "",
       javascript: typeof parsed.javascript === "string" ? parsed.javascript : ""
     };
+    if (!bundle.html && !bundle.javascript) {
+      throw new Error("TapKit dashboard bundle does not contain HTML or JavaScript");
+    }
+    if (byteSize(bundle.html) + byteSize(bundle.css) + byteSize(bundle.javascript) > MAX_INLINE_BYTES) {
+      throw new Error("TapKit inline dashboard exceeds the 1 MiB runtime limit");
+    }
+    return bundle;
+  }
+
+  function sanitizeHtml(html) {
+    const template = document.createElement("template");
+    template.innerHTML = html;
+    const forbidden = new Set([
+      "script", "iframe", "frame", "object", "embed", "link", "meta", "base", "form"
+    ]);
+    for (const element of [...template.content.querySelectorAll("*")]) {
+      if (forbidden.has(element.localName.toLowerCase())) {
+        element.remove();
+        continue;
+      }
+      for (const attribute of [...element.attributes]) {
+        const name = attribute.name.toLowerCase();
+        const value = attribute.value.trim();
+        if (
+          name.startsWith("on") ||
+          ["srcdoc", "action", "formaction", "ping", "target", "download"].includes(name)
+        ) {
+          element.removeAttribute(attribute.name);
+          continue;
+        }
+        if (name === "href" || name === "xlink:href") {
+          if (!value.startsWith("#")) element.removeAttribute(attribute.name);
+          continue;
+        }
+        if (["src", "srcset", "poster", "data"].includes(name)) {
+          if (!(name === "src" && /^data:image\//i.test(value))) {
+            element.removeAttribute(attribute.name);
+          }
+        }
+      }
+    }
+    return template.innerHTML;
+  }
+
+  function safeCss(css) {
+    return css.replace(/<\/style/gi, "<\\/style");
+  }
+
+  function safeScript(javascript) {
+    return javascript.replace(/<\/script/gi, "<\\/script");
   }
 
   function safeValue(value) {
@@ -63,21 +179,6 @@
     return cell.formattedValue ?? null;
   }
 
-  function tableToJson(table, maxRows) {
-    const columns = (table.columns || []).map((column) => ({
-      fieldName: column.fieldName,
-      dataType: column.dataType,
-      isReferenced: column.isReferenced
-    }));
-    const rows = (table.data || []).slice(0, maxRows).map((row) => row.map(dataCell));
-    return {
-      columns,
-      rows,
-      totalRowCount: table.totalRowCount ?? rows.length,
-      truncated: (table.totalRowCount ?? rows.length) > rows.length
-    };
-  }
-
   function dashboard() {
     const content = tableau.extensions.dashboardContent;
     if (!content || !content.dashboard) throw new Error("Dashboard extension context is unavailable");
@@ -90,18 +191,57 @@
     return sheet;
   }
 
+  function boundedRows(reader, maxRows) {
+    return (async () => {
+      let columns = [];
+      const rows = [];
+      let dataBytes = 0;
+      let byteTruncated = false;
+
+      for (let pageNumber = 0; pageNumber < reader.pageCount && rows.length < maxRows; pageNumber += 1) {
+        const page = await reader.getPageAsync(pageNumber);
+        if (columns.length === 0) {
+          columns = (page.columns || []).map((column) => ({
+            fieldName: column.fieldName,
+            dataType: column.dataType,
+            isReferenced: column.isReferenced
+          }));
+        }
+        for (const row of page.data || []) {
+          if (rows.length >= maxRows) break;
+          const values = row.map(dataCell);
+          const rowBytes = jsonByteSize(values);
+          if (dataBytes + rowBytes > MAX_DATA_BYTES) {
+            byteTruncated = true;
+            break;
+          }
+          rows.push(values);
+          dataBytes += rowBytes;
+        }
+        if (byteTruncated) break;
+      }
+
+      const totalRowCount = reader.totalRowCount ?? rows.length;
+      return {
+        columns,
+        rows,
+        totalRowCount,
+        truncated: byteTruncated || totalRowCount > rows.length
+      };
+    })();
+  }
+
   async function listWorksheets() {
     return dashboard().worksheets.map((sheet) => ({ name: sheet.name }));
   }
 
   async function summaryData(payload) {
     const sheet = worksheetByName(payload.worksheet);
-    const requested = Number.isInteger(payload.maxRows) ? payload.maxRows : MAX_SUMMARY_ROWS;
-    const maxRows = Math.max(1, Math.min(requested, MAX_SUMMARY_ROWS));
+    const requested = Number.isInteger(payload.maxRows) ? payload.maxRows : MAX_ROWS;
+    const maxRows = Math.max(1, Math.min(requested, MAX_ROWS));
     const reader = await sheet.getSummaryDataReaderAsync();
     try {
-      const table = await reader.getAllPagesAsync();
-      return tableToJson(table, maxRows);
+      return await boundedRows(reader, maxRows);
     } finally {
       await reader.releaseAsync();
     }
@@ -137,28 +277,11 @@
       );
     }
 
-    const requested = Number.isInteger(payload.maxRows) ? payload.maxRows : MAX_SUMMARY_ROWS;
-    const maxRows = Math.max(1, Math.min(requested, MAX_SUMMARY_ROWS));
+    const requested = Number.isInteger(payload.maxRows) ? payload.maxRows : MAX_ROWS;
+    const maxRows = Math.max(1, Math.min(requested, MAX_ROWS));
     const reader = await source.getLogicalTableDataReaderAsync(table.id, Math.min(maxRows, 10000));
     try {
-      let columns = [];
-      const rows = [];
-      for (let pageNumber = 0; pageNumber < reader.pageCount && rows.length < maxRows; pageNumber += 1) {
-        const page = await reader.getPageAsync(pageNumber);
-        if (columns.length === 0) {
-          columns = (page.columns || []).map((column) => ({
-            fieldName: column.fieldName,
-            dataType: column.dataType,
-            isReferenced: column.isReferenced
-          }));
-        }
-        for (const row of page.data || []) {
-          if (rows.length >= maxRows) break;
-          rows.push(row.map(dataCell));
-        }
-      }
-      const totalRowCount = reader.totalRowCount ?? rows.length;
-      return { columns, rows, totalRowCount, truncated: totalRowCount > rows.length };
+      return await boundedRows(reader, maxRows);
     } finally {
       await reader.releaseAsync();
     }
@@ -210,33 +333,77 @@
   ]);
 
   function post(message) {
-    if (frame.contentWindow) frame.contentWindow.postMessage(message, "*");
+    if (frame.contentWindow) frame.contentWindow.postMessage({ ...message, nonce }, "*");
   }
+
+  const TIMEOUT = Symbol("timeout");
 
   async function handleMessage(event) {
     if (event.source !== frame.contentWindow) return;
     const message = event.data;
-    if (!message || message.channel !== CHANNEL || message.version !== VERSION || message.type !== "request") return;
+    if (
+      !message ||
+      message.channel !== CHANNEL ||
+      message.version !== BRIDGE_VERSION ||
+      message.nonce !== nonce ||
+      message.type !== "request"
+    ) return;
     if (typeof message.id !== "string" || typeof message.method !== "string") return;
 
+    let requestBytes;
+    try {
+      requestBytes = jsonByteSize(message.payload || {});
+    } catch {
+      post({ channel: CHANNEL, version: BRIDGE_VERSION, type: "response", id: message.id, ok: false, error: "Bridge request is not serializable" });
+      return;
+    }
+    if (requestBytes > MAX_RPC_REQUEST_BYTES) {
+      post({ channel: CHANNEL, version: BRIDGE_VERSION, type: "response", id: message.id, ok: false, error: "Bridge request is too large" });
+      return;
+    }
     const handler = handlers.get(message.method);
     if (!handler) {
-      post({ channel: CHANNEL, version: VERSION, type: "response", id: message.id, ok: false, error: "Unsupported bridge method" });
+      post({ channel: CHANNEL, version: BRIDGE_VERSION, type: "response", id: message.id, ok: false, error: "Unsupported bridge method" });
+      return;
+    }
+    if (inFlight >= MAX_IN_FLIGHT) {
+      post({ channel: CHANNEL, version: BRIDGE_VERSION, type: "response", id: message.id, ok: false, error: "Too many concurrent bridge requests" });
       return;
     }
 
+    inFlight += 1;
+    const operation = Promise.resolve().then(() => handler(message.payload || {}));
+    let timedOut = false;
+    let timer;
     try {
-      const result = await handler(message.payload || {});
-      post({ channel: CHANNEL, version: VERSION, type: "response", id: message.id, ok: true, result });
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(TIMEOUT), RPC_TIMEOUT_MS);
+      });
+      const result = await Promise.race([operation, timeout]);
+      if (jsonByteSize(result) > MAX_RPC_RESPONSE_BYTES) {
+        throw new Error("Bridge response is too large");
+      }
+      post({ channel: CHANNEL, version: BRIDGE_VERSION, type: "response", id: message.id, ok: true, result });
     } catch (error) {
+      if (error === TIMEOUT) {
+        timedOut = true;
+        operation.finally(() => {
+          inFlight -= 1;
+        }).catch(() => {});
+      }
       post({
         channel: CHANNEL,
-        version: VERSION,
+        version: BRIDGE_VERSION,
         type: "response",
         id: message.id,
         ok: false,
-        error: error instanceof Error ? error.message : String(error)
+        error: error === TIMEOUT
+          ? "Bridge request timed out"
+          : error instanceof Error ? error.message : String(error)
       });
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (!timedOut) inFlight -= 1;
     }
   }
 
@@ -244,28 +411,65 @@
     return `
 (() => {
   "use strict";
-  const CHANNEL = "${CHANNEL}";
-  const VERSION = ${VERSION};
+  const CHANNEL = ${JSON.stringify(CHANNEL)};
+  const VERSION = ${BRIDGE_VERSION};
+  const NONCE = ${JSON.stringify(nonce)};
+  const MAX_PENDING = ${MAX_IN_FLIGHT};
+  const REQUEST_TIMEOUT_MS = ${CHILD_RPC_TIMEOUT_MS};
   let nextId = 1;
   const pending = new Map();
   const listeners = new Map();
 
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    const anchor = target && target.closest ? target.closest("a[href]") : null;
+    if (anchor) event.preventDefault();
+  }, true);
+  document.addEventListener("submit", (event) => event.preventDefault(), true);
+  if (window.navigation && typeof window.navigation.addEventListener === "function") {
+    window.navigation.addEventListener("navigate", (event) => {
+      if (event.cancelable) event.preventDefault();
+    });
+  }
+  try { window.open = () => null; } catch {}
+
   function call(method, payload = {}) {
+    if (pending.size >= MAX_PENDING) {
+      return Promise.reject(new Error("Too many concurrent TapKit requests"));
+    }
     const id = String(nextId++);
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      parent.postMessage({ channel: CHANNEL, version: VERSION, type: "request", id, method, payload }, "*");
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error("TapKit bridge request timed out"));
+      }, REQUEST_TIMEOUT_MS);
+      pending.set(id, { resolve, reject, timer });
+      parent.postMessage({
+        channel: CHANNEL,
+        version: VERSION,
+        nonce: NONCE,
+        type: "request",
+        id,
+        method,
+        payload
+      }, "*");
     });
   }
 
   addEventListener("message", (event) => {
     if (event.source !== parent) return;
     const message = event.data;
-    if (!message || message.channel !== CHANNEL || message.version !== VERSION) return;
+    if (
+      !message ||
+      message.channel !== CHANNEL ||
+      message.version !== VERSION ||
+      message.nonce !== NONCE
+    ) return;
     if (message.type === "response") {
       const waiter = pending.get(message.id);
       if (!waiter) return;
       pending.delete(message.id);
+      clearTimeout(waiter.timer);
       if (message.ok) waiter.resolve(message.result);
       else waiter.reject(new Error(message.error || "TapKit bridge request failed"));
       return;
@@ -276,6 +480,7 @@
   });
 
   window.tapkit = Object.freeze({
+    runtimeVersion: ${RUNTIME_VERSION},
     listWorksheets: () => call("worksheets.list"),
     getSummaryData: (worksheet, maxRows) => call("data.summary", { worksheet, maxRows }),
     listDataSources: () => call("datasources.list"),
@@ -295,13 +500,19 @@
     }
   });
 
-  parent.postMessage({ channel: CHANNEL, version: VERSION, type: "ready" }, "*");
+  parent.postMessage({
+    channel: CHANNEL,
+    version: VERSION,
+    nonce: NONCE,
+    type: "ready"
+  }, "*");
 })();
 `;
   }
 
   function srcdoc(html, css, javascript) {
-    const csp = "default-src 'none'; img-src data: blob:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; media-src data: blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
+    const csp = "default-src 'none'; img-src data: blob:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; media-src data: blob:; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'";
+    const sanitizedHtml = sanitizeHtml(html);
     return `<!doctype html>
 <html>
 <head>
@@ -309,12 +520,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <style>html,body{margin:0;width:100%;min-height:100%;box-sizing:border-box}*,*:before,*:after{box-sizing:inherit}
-${css}</style>
+${safeCss(css)}</style>
 </head>
 <body>
-${html}
-<script>${childSdk().replace(/<\/script/gi, "<\\/script")}<\/script>
-<script>${javascript.replace(/<\/script/gi, "<\\/script")}<\/script>
+${sanitizedHtml}
+<script>${safeScript(childSdk())}</script>
+<script>${safeScript(javascript)}</script>
 </body>
 </html>`;
   }
@@ -323,14 +534,14 @@ ${html}
     const eventType = tableau.TableauEventType;
     for (const sheet of dashboard().worksheets) {
       sheet.addEventListener(eventType.FilterChanged, (event) => {
-        post({ channel: CHANNEL, version: VERSION, type: "event", event: "filterChanged", payload: { worksheet: sheet.name, fieldName: event.fieldName } });
+        post({ channel: CHANNEL, version: BRIDGE_VERSION, type: "event", event: "filterChanged", payload: { worksheet: sheet.name, fieldName: event.fieldName } });
       });
       sheet.addEventListener(eventType.MarkSelectionChanged, () => {
-        post({ channel: CHANNEL, version: VERSION, type: "event", event: "selectionChanged", payload: { worksheet: sheet.name } });
+        post({ channel: CHANNEL, version: BRIDGE_VERSION, type: "event", event: "selectionChanged", payload: { worksheet: sheet.name } });
       });
       if (eventType.SummaryDataChanged) {
         sheet.addEventListener(eventType.SummaryDataChanged, () => {
-          post({ channel: CHANNEL, version: VERSION, type: "event", event: "summaryDataChanged", payload: { worksheet: sheet.name } });
+          post({ channel: CHANNEL, version: BRIDGE_VERSION, type: "event", event: "summaryDataChanged", payload: { worksheet: sheet.name } });
         });
       }
     }
@@ -339,13 +550,10 @@ ${html}
   async function start() {
     try {
       await tableau.extensions.initializeAsync();
-      const bundle = decodeBundle(setting("tapkit.bundle_b64"));
-      if (!bundle.html && !bundle.javascript) {
-        throw new Error("TapKit dashboard bundle does not contain HTML or JavaScript");
-      }
-      if (inlineSize([bundle.html, bundle.css, bundle.javascript]) > MAX_INLINE_BYTES) {
-        throw new Error("TapKit inline dashboard exceeds the 1 MiB runtime limit");
-      }
+      const bundleB64 = setting("tapkit.bundle_b64");
+      const bundleMac = setting("tapkit.bundle_mac");
+      await verifyBundle(bundleB64, bundleMac);
+      const bundle = decodeBundle(bundleB64);
 
       addEventListener("message", handleMessage);
       registerEvents();

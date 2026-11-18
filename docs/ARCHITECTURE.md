@@ -146,7 +146,7 @@ container/canvas padding, text, worksheet zones, filter cards, and supported zon
 compiler owns Tableau IDs, normalized geometry, dashboard datasource dependencies, and
 window/viewpoint registration.
 
-`create_web_dashboard` is a separate presentation path. It emits one full-canvas Dashboard Extension object and persists a bounded HTML/CSS/JavaScript bundle in extension instance settings. Generated code runs in a sandboxed iframe and talks to Tableau only through the trusted host bridge. Direct datasource reads use Tableau full-data APIs, so the extension manifest declares that permission explicitly.
+`create_web_dashboard` is a separate presentation path. It emits one full-canvas Dashboard Extension object and persists a bounded, versioned HTML/CSS/JavaScript bundle in extension instance settings. Remote bundles are HMAC-SHA256 signed by the trusted authoring process and verified by `tabkit-extension-host` before execution. Generated code runs in a sanitized sandboxed iframe and talks to Tableau only through the trusted host bridge. Direct datasource reads use Tableau Full Data Access APIs, so the extension manifest declares that permission explicitly. Compatible runtime revisions keep one stable `host.html` URL and dispatch by `runtime_version` inside the signed bundle.
 
 Worksheet presentation may be attached to the dashboard spec as a bounded set of style patches:
 font family/size/color, axis/grid/zero-line styling, mark size/line width, and label visibility.
