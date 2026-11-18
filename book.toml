@@ -1,0 +1,14 @@
+[book]
+title = "TabKit"
+description = "TabKit technical documentation"
+authors = ["TabKit"]
+language = "en"
+src = "."
+
+[build]
+build-dir = "target/site"
+
+[output.html]
+git-repository-url = "https://github.com/agredyaev/tabkit"
+edit-url-template = "https://github.com/agredyaev/tabkit/edit/main/{path}"
+no-section-label = true

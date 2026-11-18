@@ -1,0 +1,16 @@
+# Summary
+
+- [Overview](README.md)
+- [Documentation index](docs/README.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Authoring](docs/AUTHORING.md)
+  - [Native dashboards](docs/DASHBOARD.md)
+  - [Web dashboards](docs/WEB_DASHBOARD.md)
+  - [Extension host deployment](docs/EXTENSION_DEPLOYMENT.md)
+- [Rust API map](docs/API.md)
+- [Error contract](docs/ERRORS.md)
+- [Performance](docs/PERFORMANCE.md)
+- [Security](SECURITY.md)
+- [Extension runtime](extension/README.md)
+- [Changelog](CHANGELOG.md)
+- [Rustdoc API reference](docs/RUSTDOC.md)
