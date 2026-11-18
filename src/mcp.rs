@@ -732,7 +732,7 @@ fn http_router(server: TabKitMcp, bearer_token: Option<String>) -> axum::Router 
 ///
 /// When `bearer_token` is present, every MCP request must match it exactly.
 /// Passing `None` installs no authentication layer; callers are responsible for
-/// restricting such a listener to a trusted/loopback boundary.
+/// restricting such a listener with loopback binding or external access control.
 pub async fn serve_http(
     server: TabKitMcp,
     bind: std::net::SocketAddr,

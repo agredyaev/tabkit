@@ -14,8 +14,9 @@ enum Transport {
 
 #[derive(Parser)]
 #[command(name = "tabkit-mcp")]
-#[command(about = "TabKit MCP server for Tableau Server 2026.2.4")]
+#[command(about = "MCP server for Tableau 2026.2.4 workbooks")]
 struct Args {
+    /// MCP transport. HTTP serves the MCP endpoint at /mcp.
     #[arg(long, value_enum, default_value_t = Transport::Stdio)]
     transport: Transport,
 
@@ -35,15 +36,19 @@ struct Args {
     #[arg(long)]
     allow_unauthenticated_http: bool,
 
+    /// Tableau Server/Cloud base URL. Omit with --tableau-pat-name for local-only tools.
     #[arg(long, env = "TABLEAU_SERVER")]
     tableau_server: Option<String>,
 
+    /// Tableau site content URL. Empty selects the default site.
     #[arg(long, env = "TABLEAU_SITE", default_value = "")]
     tableau_site: String,
 
+    /// Tableau Personal Access Token name. Must be supplied with --tableau-server.
     #[arg(long, env = "TABLEAU_PAT_NAME")]
     tableau_pat_name: Option<String>,
 
+    /// Environment variable containing the Tableau PAT secret.
     #[arg(
         long,
         env = "TABLEAU_PAT_SECRET_ENV",
@@ -51,6 +56,7 @@ struct Args {
     )]
     tableau_pat_secret_env: String,
 
+    /// Tableau HTTP request timeout in seconds.
     #[arg(long, default_value_t = 120)]
     tableau_timeout_seconds: u64,
 }
@@ -101,7 +107,7 @@ async fn run() -> tabkit::Result<()> {
             {
                 return Err(Error::new(
                     "MCP_AUTH",
-                    "Refusing unauthenticated HTTP on a non-loopback address; configure TABKIT_MCP_TOKEN or pass --allow-unauthenticated-http for a protected private/VPC deployment",
+                    "Refusing unauthenticated HTTP on a non-loopback address; configure TABKIT_MCP_TOKEN or pass --allow-unauthenticated-http only when access is restricted outside TabKit",
                 ));
             }
             mcp::serve_http(server, args.bind, bearer_token).await

@@ -525,7 +525,7 @@ impl<'a> Builder<'a> {
                         Err(()) => self.gap(
                             "initial_sql_lineage_unresolved",
                             connection.name.clone(),
-                            "Initial SQL could not be reduced to a safe set of source tables/temp-table materializations",
+                            "Initial SQL is outside the supported source-table/temp-table analysis subset",
                         ),
                     }
                 }
@@ -568,7 +568,7 @@ impl<'a> Builder<'a> {
                     Err(()) => self.gap(
                         "sql_lineage_unresolved",
                         relation.name.clone(),
-                        "Custom SQL could not be reduced to a safe set of source tables",
+                        "Custom SQL is outside the supported source-table analysis subset",
                     ),
                 }
             }
@@ -651,7 +651,7 @@ impl<'a> Builder<'a> {
                         "relation_shape_unsupported",
                         datasource.name.clone(),
                         format!(
-                            "Relation type {:?} is not yet modeled",
+                            "Unsupported relation type {:?} for lineage",
                             self.book.xml.attr_raw(relation_node, "type")
                         ),
                     );
