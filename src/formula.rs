@@ -267,4 +267,72 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn ignores_non_code_references_and_deduplicates_runtime_warnings() -> Result<()> {
+        let analysis = analyze(
+            "'[StringField]' + \"[DoubleQuoted]\" + #2026-11-18# + [Sales] // [LineComment]\n\
+             /* [BlockComment] */ + [Sales] + NOW() + NOW()",
+        )?;
+        assert_eq!(
+            analysis.references,
+            vec![Reference {
+                datasource: None,
+                field: "[Sales]".into(),
+            }]
+        );
+        assert_eq!(analysis.warnings, vec!["NOW depends on runtime state"]);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_external_execution_and_malformed_formula_structure() {
+        for source in [
+            "RAWSQL_STR('select 1')",
+            "SCRIPT_REAL('return 1', [Sales])",
+            "MODEL_EXTENSION_BOOL('model', [Sales])",
+        ] {
+            let error = match analyze(source) {
+                Ok(_) => panic!("external execution was accepted"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "UNSAFE_FORMULA", "{source}");
+        }
+
+        for source in [
+            "",
+            "'unterminated",
+            "/* unterminated",
+            "#2026-11-18",
+            "[unterminated",
+            "(1}",
+            "IF [Sales] THEN 1",
+            "END",
+            "1; 2",
+            "\0",
+        ] {
+            let error = match analyze(source) {
+                Ok(_) => panic!("malformed formula was accepted"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "FORMULA", "{source:?}");
+        }
+    }
+
+    #[test]
+    fn qualified_reference_requires_exact_bracketed_shape() -> Result<()> {
+        assert_eq!(
+            qualified(" [Orders] . [Profit]] Ratio] ")?,
+            ("Orders".into(), "[Profit]] Ratio]".into())
+        );
+
+        for source in ["[Orders]", "Orders.[Profit]", "[Orders].[Profit] + 1"] {
+            let error = match qualified(source) {
+                Ok(_) => panic!("invalid qualified reference was accepted"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "REFERENCE", "{source}");
+        }
+        Ok(())
+    }
 }

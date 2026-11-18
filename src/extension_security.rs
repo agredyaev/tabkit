@@ -74,4 +74,17 @@ mod tests {
         assert!(!verify_bundle(b"changed", &signature, &key)?);
         Ok(())
     }
+
+    #[test]
+    fn verification_rejects_wrong_key_and_malformed_signature() -> Result<()> {
+        let key = [7_u8; EXTENSION_SIGNING_KEY_BYTES];
+        let other_key = [8_u8; EXTENSION_SIGNING_KEY_BYTES];
+        let bundle = br#"{"runtime_version":1}"#;
+        let signature = sign_bundle(bundle, &key)?;
+
+        assert!(!verify_bundle(bundle, &signature, &other_key)?);
+        assert!(!verify_bundle(bundle, "not-base64!", &key)?);
+        assert!(!verify_bundle(bundle, "", &key)?);
+        Ok(())
+    }
 }

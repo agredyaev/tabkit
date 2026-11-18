@@ -115,3 +115,60 @@ fn admitted_layout<'a>(
     )?;
     Ok((sorted, output_len as usize))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn patch(start: u32, end: u32, expected: &str, replacement: &str) -> Patch {
+        Patch {
+            span: Span { start, end },
+            expected: expected.into(),
+            replacement: replacement.into(),
+            reason: "test".into(),
+        }
+    }
+
+    #[test]
+    fn applies_unsorted_non_overlapping_patches_and_preserves_other_bytes() -> Result<()> {
+        let input = "abcdef";
+        let output = apply(
+            input,
+            &[patch(4, 6, "ef", "EF"), patch(0, 2, "ab", "AB")],
+            64,
+        )?;
+        assert_eq!(output, "ABcdEF");
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_overlap_stale_boundary_and_size_violations() {
+        let overlap = match apply(
+            "abcdef",
+            &[patch(1, 4, "bcd", "x"), patch(3, 5, "de", "y")],
+            64,
+        ) {
+            Ok(_) => panic!("overlap was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(overlap.code, "PATCH_OVERLAP");
+
+        let stale = match apply("abcdef", &[patch(1, 3, "XX", "x")], 64) {
+            Ok(_) => panic!("stale expected bytes were accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(stale.code, "STALE_PRECONDITION");
+
+        let boundary = match apply("éx", &[patch(0, 1, "", "x")], 64) {
+            Ok(_) => panic!("UTF-8 split was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(boundary.code, "PATCH_BOUNDARY");
+
+        let limit = match apply("abc", &[patch(0, 1, "a", "0123456789")], 4) {
+            Ok(_) => panic!("oversized output was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(limit.code, "LIMIT");
+    }
+}

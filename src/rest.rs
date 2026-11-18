@@ -903,4 +903,73 @@ mod tests {
         assert_eq!(rejected.code, "CONFIG");
         Ok(())
     }
+
+    #[test]
+    fn rejects_non_https_and_empty_pat_configuration() {
+        let base = || Config {
+            server: "https://tableau.example.test".into(),
+            site: String::new(),
+            api_version: REST_API_VERSION.into(),
+            pat_name: "test-pat".into(),
+            pat_secret_env: "TABLEAU_PAT_SECRET".into(),
+            timeout: Duration::from_secs(30),
+        };
+
+        let mut config = base();
+        config.server = "http://tableau.example.test".into();
+        assert_eq!(
+            config.validate().expect_err("HTTP server must fail").code,
+            "CONFIG"
+        );
+
+        config = base();
+        config.server = "not a url".into();
+        assert_eq!(
+            config.validate().expect_err("invalid URL must fail").code,
+            "CONFIG"
+        );
+
+        config = base();
+        config.pat_name = " ".into();
+        assert_eq!(
+            config
+                .validate()
+                .expect_err("blank PAT name must fail")
+                .code,
+            "CONFIG"
+        );
+
+        config = base();
+        config.pat_secret_env = String::new();
+        assert_eq!(
+            config
+                .validate()
+                .expect_err("blank PAT secret env must fail")
+                .code,
+            "CONFIG"
+        );
+    }
+
+    #[test]
+    fn api_url_encodes_dynamic_segments_and_preserves_base_path() -> Result<()> {
+        let config = Config {
+            server: "https://tableau.example.test/base/".into(),
+            site: String::new(),
+            api_version: REST_API_VERSION.into(),
+            pat_name: "test-pat".into(),
+            pat_secret_env: "TABLEAU_PAT_SECRET".into(),
+            timeout: Duration::from_secs(30),
+        };
+        let url = api_url(&config, Some("site id"), &["workbooks", "id/with slash"])?;
+        assert_eq!(
+            url.as_str(),
+            "https://tableau.example.test/base/api/3.29/sites/site%20id/workbooks/id%2Fwith%20slash"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn publish_xml_attribute_escaping_covers_all_reserved_characters() {
+        assert_eq!(escape_attr("&<>\"'"), "&amp;&lt;&gt;&quot;&apos;");
+    }
 }

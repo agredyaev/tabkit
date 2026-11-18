@@ -487,4 +487,122 @@ mod tests {
         assert!(twb.contains("name=\"B\""));
         Ok(())
     }
+
+    fn write_twbx(path: &Path, entries: &[(&str, &[u8])]) -> Result<()> {
+        let file = File::create(path)?;
+        let mut zip = ZipWriter::new(file);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, bytes) in entries {
+            zip.start_file(*name, options)?;
+            zip.write_all(bytes)?;
+        }
+        zip.finish()?;
+        Ok(())
+    }
+
+    fn open_error(path: &Path, limits: &Limits) -> Error {
+        match Package::open(path, limits) {
+            Ok(_) => panic!("package was accepted"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn rejects_unsafe_duplicate_and_ambiguous_twbx_shapes() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let limits = Limits::default();
+
+        let unsafe_path = dir.path().join("unsafe.twbx");
+        write_twbx(
+            &unsafe_path,
+            &[("../book.twb", br#"<workbook version="26.2"/>"#)],
+        )?;
+        assert_eq!(open_error(&unsafe_path, &limits).code, "ZIP_PATH");
+
+        let duplicate = dir.path().join("duplicate.twbx");
+        write_twbx(
+            &duplicate,
+            &[
+                ("Book.twb", br#"<workbook version="26.2"/>"#),
+                ("book.TWB", br#"<workbook version="26.2"/>"#),
+            ],
+        )?;
+        assert_eq!(open_error(&duplicate, &limits).code, "ZIP_DUPLICATE");
+
+        let ambiguous = dir.path().join("ambiguous.twbx");
+        write_twbx(
+            &ambiguous,
+            &[
+                ("a.twb", br#"<workbook version="26.2"/>"#),
+                ("b.twb", br#"<workbook version="26.2"/>"#),
+            ],
+        )?;
+        assert_eq!(open_error(&ambiguous, &limits).code, "AMBIGUOUS_PACKAGE");
+
+        let missing = dir.path().join("missing.twbx");
+        write_twbx(&missing, &[("Data/value.txt", b"x")])?;
+        assert_eq!(open_error(&missing, &limits).code, "FORMAT");
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_write_rejects_type_clobber_and_stale_source() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let input = dir.path().join("input.twb");
+        std::fs::write(
+            &input,
+            br#"<workbook version="26.2" source-build="test"></workbook>"#,
+        )?;
+        let limits = Limits::default();
+        let (package, twb) = Package::open(&input, &limits)?;
+
+        let wrong_type = dir.path().join("candidate.twbx");
+        let error = match package.write_candidate(&wrong_type, &twb, &limits) {
+            Ok(_) => return Err(Error::new("TEST", "wrong candidate type was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "FORMAT");
+
+        let existing = dir.path().join("candidate.twb");
+        std::fs::write(&existing, b"occupied")?;
+        let error = match package.write_candidate(&existing, &twb, &limits) {
+            Ok(_) => return Err(Error::new("TEST", "existing output was overwritten")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "OUTPUT_EXISTS");
+
+        std::fs::write(
+            &input,
+            br#"<workbook version="26.2" source-build="changed"></workbook>"#,
+        )?;
+        let stale = dir.path().join("stale.twb");
+        let error = match package.write_candidate(&stale, &twb, &limits) {
+            Ok(_) => return Err(Error::new("TEST", "stale source was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "STALE_BASE");
+        assert!(!stale.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn twb_admission_enforces_file_and_xml_limits() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let input = dir.path().join("input.twb");
+        std::fs::write(&input, b"<workbook version=\"26.2\"></workbook>")?;
+
+        let file_limits = Limits {
+            file_bytes: 8,
+            ..Limits::default()
+        };
+        assert_eq!(open_error(&input, &file_limits).code, "LIMIT");
+
+        let xml_limits = Limits {
+            xml_bytes: 8,
+            ..Limits::default()
+        };
+        assert_eq!(open_error(&input, &xml_limits).code, "LIMIT");
+        Ok(())
+    }
 }

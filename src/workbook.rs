@@ -1049,6 +1049,37 @@ mod version_tests {
         assert_eq!(rejected.code, "VERSION");
         Ok(())
     }
+
+    #[test]
+    fn blank_template_has_zero_semantic_objects_and_required_root_shape() -> Result<()> {
+        let book = Workbook::open(BLANK_TWB_26_2.to_vec())?;
+        let summary = book.summary();
+        assert_eq!(summary.version, "26.2");
+        assert_eq!(summary.datasources, 0);
+        assert_eq!(summary.connections, 0);
+        assert_eq!(summary.relations, 0);
+        assert_eq!(summary.fields, 0);
+        assert_eq!(summary.calculations, 0);
+        assert_eq!(summary.parameters, 0);
+        assert_eq!(summary.worksheets, 0);
+        assert_eq!(summary.dashboards, 0);
+
+        let root = book.xml.root();
+        assert_eq!(book.xml.attr_raw(root, "version"), Some("26.2"));
+        assert_eq!(book.xml.attr_raw(root, "original-version"), Some("26.2"));
+        assert_eq!(
+            book.xml.attr_raw(root, "source-build"),
+            Some("0.0.0 (0000.0.0.0)")
+        );
+        assert_eq!(book.xml.attr_raw(root, "source-platform"), Some("win"));
+        assert!(
+            book.xml
+                .direct_child(root, "document-format-change-manifest")
+                .is_some()
+        );
+        assert!(book.xml.direct_child(root, "explain-data").is_some());
+        Ok(())
+    }
 }
 
 #[cfg(test)]

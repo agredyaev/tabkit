@@ -532,4 +532,37 @@ mod tests {
         assert_eq!(error.code, "XML_SHAPE");
         Ok(())
     }
+
+    fn parse_error(source: &str) -> Error {
+        match Document::parse(source.as_bytes().to_vec()) {
+            Ok(_) => panic!("XML was accepted"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn rejects_dtd_multiple_roots_and_text_outside_root() {
+        assert_eq!(parse_error("<!DOCTYPE root><root/>").code, "XML");
+        assert_eq!(parse_error("<a/><b/>").code, "XML");
+        assert_eq!(parse_error("text<root/>").code, "XML");
+        assert_eq!(parse_error("<root>").code, "XML");
+    }
+
+    #[test]
+    fn decodes_supported_attribute_entities_and_rejects_unknown_entity() -> Result<()> {
+        let document =
+            Document::parse(br#"<root value="a&amp;b&#x41;&#66;&quot;&apos;&lt;&gt;"/>"#.to_vec())?;
+        assert_eq!(
+            document.attr(document.root(), "value")?.as_deref(),
+            Some("a&bAB\"'<>")
+        );
+
+        let unknown = Document::parse(br#"<root value="&bogus;"/>"#.to_vec())?;
+        let error = match unknown.attr(unknown.root(), "value") {
+            Ok(_) => panic!("unknown XML entity was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "XML");
+        Ok(())
+    }
 }
