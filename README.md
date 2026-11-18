@@ -37,7 +37,7 @@ tabkit-extension-host-v<version>-windows-x64.zip
 | package | TWB/TWBX open, bounded repack, preservation checks |
 | inspect | datasources, connections, relations, fields, calculations, parameters, worksheets, dashboards |
 | lineage | SQL/Initial SQL/Custom SQL -> field -> calculation -> worksheet -> dashboard |
-| authoring | calculation, parameter, worksheet, filter action, parameter action |
+| authoring | blank workbook, calculation, parameter, worksheet, filter action, parameter action |
 | native dashboard | semantic layout, filter cards, supported worksheet styles |
 | web dashboard | signed HTML/CSS/JavaScript Dashboard Extension |
 | Tableau REST | search, download, `validateWorkbook`, publish, job polling |
@@ -89,6 +89,7 @@ stdio allows local paths.
 
 ```text
 tableau_search_workbooks
+workbook_create
 workbook_open
 workbook_inspect
 workbook_lineage
@@ -103,9 +104,10 @@ Typical lifecycle:
 
 ```mermaid
 flowchart LR
+    create["create"] --> edit["edit"]
     search["search"] --> open["open"]
     open --> inspect["inspect / lineage"]
-    inspect --> edit["edit"]
+    inspect --> edit
     edit --> validate["validateWorkbook"]
     validate --> publish["publish"]
     publish --> job["job"]

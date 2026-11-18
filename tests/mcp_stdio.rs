@@ -100,6 +100,7 @@ fn stdio_mcp_discovers_and_uses_local_workbook() {
         .collect();
     for expected in [
         "tableau_search_workbooks",
+        "workbook_create",
         "workbook_open",
         "workbook_inspect",
         "workbook_lineage",
@@ -110,6 +111,99 @@ fn stdio_mcp_discovers_and_uses_local_workbook() {
         "workbook_close",
     ] {
         assert!(names.contains(&expected), "missing MCP tool {expected}");
+    }
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc":"2.0",
+            "id":30,
+            "method":"tools/call",
+            "params":{
+                "name":"workbook_create",
+                "arguments":{}
+            }
+        }),
+    );
+    let created = tool_text(&receive(&mut stdout));
+    let blank_handle = created["handle"]
+        .as_str()
+        .expect("blank workbook handle")
+        .to_owned();
+    assert_eq!(created["created"], true);
+    assert_eq!(created["format"], "twb");
+    assert_eq!(created.pointer("/summary/datasources"), Some(&json!(0)));
+    assert_eq!(created.pointer("/summary/worksheets"), Some(&json!(0)));
+    assert_eq!(created.pointer("/summary/dashboards"), Some(&json!(0)));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc":"2.0",
+            "id":31,
+            "method":"tools/call",
+            "params":{
+                "name":"workbook_edit",
+                "arguments":{
+                    "handle":blank_handle,
+                    "batch":{
+                        "edits":[{
+                            "op":"create_web_dashboard",
+                            "name":"Blank Web",
+                            "width":1280,
+                            "height":720,
+                            "extension_url":"http://127.0.0.1:8765/host.html",
+                            "html":"<main>Blank Web</main>",
+                            "css":"",
+                            "javascript":""
+                        }]
+                    }
+                }
+            }
+        }),
+    );
+    let blank_edited = tool_text(&receive(&mut stdout));
+    let blank_candidate = blank_edited["handle"]
+        .as_str()
+        .expect("blank candidate handle")
+        .to_owned();
+    assert_eq!(blank_edited.pointer("/summary/dashboards"), Some(&json!(1)));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc":"2.0",
+            "id":32,
+            "method":"tools/call",
+            "params":{
+                "name":"workbook_inspect",
+                "arguments":{
+                    "handle":blank_candidate,
+                    "kind":"dashboard",
+                    "query":"Blank Web"
+                }
+            }
+        }),
+    );
+    let blank_dashboard = tool_text(&receive(&mut stdout));
+    assert_eq!(blank_dashboard["count"], 1);
+    assert_eq!(blank_dashboard["items"][0]["name"], "Blank Web");
+
+    for (id, close_handle) in [(33, blank_candidate), (34, blank_handle)] {
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "method":"tools/call",
+                "params":{
+                    "name":"workbook_close",
+                    "arguments":{"handle":close_handle}
+                }
+            }),
+        );
+        let closed = tool_text(&receive(&mut stdout));
+        assert_eq!(closed["closed"], true);
     }
 
     send(

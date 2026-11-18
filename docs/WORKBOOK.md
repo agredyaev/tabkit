@@ -23,6 +23,29 @@ flowchart LR
 The original TWB source remains authoritative. TabKit does not deserialize the entire workbook into a
 second object model.
 
+
+## Blank workbook creation
+
+`workbook_create` writes one TWB 26.2 template into TabKit's temporary workspace.
+
+| Root contract | Value |
+| --- | --- |
+| `version` | `26.2` |
+| `original-version` | `26.2` |
+| `source-build` | `0.0.0 (0000.0.0.0)` |
+| `source-platform` | `win` |
+| manifest | `ManifestByVersion` |
+| initial semantic objects | zero datasources, worksheets, dashboards |
+
+The template contains the 2026.2 `explain-data` element required by the published XSD root sequence.
+It contains no synthetic worksheet or datasource.
+
+Tableau documents `ManifestByVersion` and the zeroed `source-build` form for direct TWB authoring:
+https://github.com/tableau/tableau-document-schemas
+
+`workbook_create` creates the local snapshot only. `workbook_validate` submits the resulting TWB to
+Tableau Server before publish.
+
 ## Admission limits
 
 Default limits:

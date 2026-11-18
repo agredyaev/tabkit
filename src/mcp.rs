@@ -127,6 +127,9 @@ struct SearchWorkbooksArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct CreateWorkbookArgs {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct OpenWorkbookArgs {
     /// Tableau workbook LUID to download from the configured Tableau site.
     workbook_id: Option<String>,
@@ -342,6 +345,22 @@ impl TabKitMcp {
         }))
     }
 
+    fn create_workbook(&self) -> TapResult<Value> {
+        let permit = self.reserve_session()?;
+        let path = self
+            .state
+            .workspace
+            .path()
+            .join(format!("blank-{}.twb", uuid::Uuid::new_v4().simple()));
+        std::fs::write(&path, workbook::BLANK_TWB_26_2)?;
+        let mut result = self.insert_path_reserved(path, true, permit)?;
+        if let Value::Object(object) = &mut result {
+            object.insert("created".into(), Value::Bool(true));
+            object.insert("format".into(), Value::String("twb".into()));
+        }
+        Ok(result)
+    }
+
     fn open_workbook(&self, args: OpenWorkbookArgs) -> TapResult<Value> {
         match (args.workbook_id, args.path) {
             (Some(workbook_id), None) => {
@@ -434,6 +453,19 @@ impl TabKitMcp {
                     .with_rest(|rest| rest.search_workbooks(&args.query, limit))
                     .and_then(|items| serde_json::to_value(items).map_err(Into::into))
             })
+            .await?;
+        json_result(&value)
+    }
+
+    #[tool(
+        description = "Create a blank Tableau 2026.2 workbook and return a reusable handle. Use the returned handle with workbook_edit, then workbook_validate and workbook_publish."
+    )]
+    async fn workbook_create(
+        &self,
+        Parameters(_args): Parameters<CreateWorkbookArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        let value = self
+            .blocking(move |server| server.create_workbook())
             .await?;
         json_result(&value)
     }
@@ -606,7 +638,7 @@ impl ServerHandler for TabKitMcp {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "TabKit operates on Tableau 2026.2.4 workbooks. Open a workbook once and reuse its handle. Inspect or trace lineage before editing when object names or dependencies require discovery. Use workbook_edit for typed edits; do not request or generate raw Tableau XML. Validate edited candidates with workbook_validate before publish. workbook_edit accepts create_web_dashboard; remote web dashboards require an HTTPS extension_url and TABKIT_EXTENSION_SIGNING_KEY.".to_owned(),
+                "TabKit operates on Tableau 2026.2.4 workbooks. Use workbook_create for a new workbook or workbook_open for an existing workbook. Reuse handles across tools. Inspect or trace lineage before editing when object names or dependencies require discovery. Use workbook_edit for typed edits; do not request or generate raw Tableau XML. Validate edited candidates with workbook_validate before publish. workbook_edit accepts create_web_dashboard; remote web dashboards require an HTTPS extension_url and TABKIT_EXTENSION_SIGNING_KEY.".to_owned(),
             )
     }
 }
@@ -963,7 +995,7 @@ mod tests {
             .pointer("/result/tools")
             .and_then(Value::as_array)
             .expect("tools array");
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
         for tool in tools {
             assert_eq!(
                 tool.pointer("/inputSchema/type").and_then(Value::as_str),
@@ -971,6 +1003,12 @@ mod tests {
                 "tool has invalid input schema: {tool}"
             );
         }
+        assert!(
+            tools.iter().any(|tool| {
+                tool.get("name").and_then(Value::as_str) == Some("workbook_create")
+            }),
+            "workbook_create schema missing"
+        );
         let edit_tool = tools
             .iter()
             .find(|tool| tool.get("name").and_then(Value::as_str) == Some("workbook_edit"))

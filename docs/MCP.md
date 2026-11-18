@@ -23,6 +23,7 @@ deployment network controls must restrict access.
 
 ```mermaid
 flowchart LR
+    create["workbook_create"] --> edit["workbook_edit"]
     search["tableau_search_workbooks"] --> open["workbook_open"]
     open --> inspect["workbook_inspect"]
     open --> lineage["workbook_lineage"]
@@ -62,6 +63,27 @@ A handle represents one immutable package/workbook/lineage snapshot.
 
 `workbook_open` returns the handle, workbook summary, and lineage-gap count. Server-downloaded opens
 also return download bytes, SHA-256, format, and Tableau workbook LUID.
+
+
+## New workbook flow
+
+`workbook_create` performs no Tableau REST call. It writes a TabKit-owned TWB 26.2 into the MCP
+workspace and indexes it immediately.
+
+```mermaid
+flowchart LR
+    create["workbook_create"] --> handle["blank handle"]
+    handle --> edit["workbook_edit"]
+    edit --> validate["workbook_validate"]
+    validate --> publish["workbook_publish"]
+    publish --> job["tableau_job"]
+```
+
+A blank workbook contains no datasource, worksheet, or dashboard. `create_web_dashboard` accepts that
+handle because web-dashboard authoring does not require a worksheet or datasource.
+
+Run `workbook_validate` before publish. Tableau Server performs semantic/XSD validation for the
+generated workbook.
 
 ## Inspect
 

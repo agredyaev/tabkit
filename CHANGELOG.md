@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### MCP
+
+- added `workbook_create` for TabKit-owned blank TWB 26.2 handles;
+- added `workbook_create -> create_web_dashboard -> validate -> publish` lifecycle coverage.
+
 ## 0.9.0 - 2026-11-18
 
 First release of the Tableau 2026.2.4 implementation.

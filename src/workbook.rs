@@ -17,6 +17,21 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Tableau 2026.2 blank workbook for headless authoring.
+///
+/// The root attributes and `ManifestByVersion` follow Tableau's 2026.2 document
+/// schema guidance. `explain-data` satisfies the 2026.2 XSD root sequence.
+pub(crate) const BLANK_TWB_26_2: &[u8] = br#"<?xml version='1.0' encoding='utf-8' ?>
+<workbook original-version='26.2' source-build='0.0.0 (0000.0.0.0)' source-platform='win' version='26.2' xmlns:user='http://www.tableausoftware.com/xml/user'>
+  <document-format-change-manifest>
+    <ManifestByVersion />
+  </document-format-change-manifest>
+  <explain-data enabled-for-viewer='false' extreme-values-enabled-for-all='false'>
+    <explanation-types />
+  </explain-data>
+</workbook>
+"#;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 /// Dense workbook-local datasource ID; invalid across reparses or other workbooks.
 pub struct DatasourceId(pub u32);
