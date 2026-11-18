@@ -2,28 +2,33 @@
 
 ## Runtime boundary
 
-```text
-MCP client
-   |
-   +-- stdio (desktop/local)
-   |
-   +-- stateless Streamable HTTP (remote)
-          |
-       TabKit state
-          |
-REST download -> TWB/TWBX package
-                   |
-              generic XML index
-                   |
-        typed workbook index ----> lineage
-                   |
-            semantic edit batch
-                   |
-          bounded source patches
-                   |
-          candidate TWB/TWBX
-                   |
-          REST validate/publish
+```mermaid
+flowchart TD
+    client["MCP client"]
+    mcp["TabKit MCP"]
+    state["Workbook session state"]
+    download["Tableau REST download"]
+    package["TWB / TWBX package"]
+    xml["Source-backed XML index"]
+    workbook["Typed workbook index"]
+    lineage["Lineage"]
+    edit["Semantic edit batch"]
+    patch["Source-preserving patches"]
+    candidate["Candidate TWB / TWBX"]
+    validate["Tableau REST validateWorkbook / publish"]
+
+    client -->|stdio| mcp
+    client -->|Streamable HTTP| mcp
+    mcp --> state
+    state --> download
+    download --> package
+    package --> xml
+    xml --> workbook
+    workbook --> lineage
+    workbook --> edit
+    edit --> patch
+    patch --> candidate
+    candidate --> validate
 ```
 
 Network work is confined to explicit Tableau and MCP boundaries. Workbook inspection, lineage
@@ -78,15 +83,17 @@ embedded TWB; package/resource correctness is ultimately exercised by the publis
 
 Lineage uses dense IDs and flat edge arrays; there is no generic graph framework.
 
-```text
-connection -> Initial SQL -> datasource
-source table -> Custom SQL
-physical/custom/join -> datasource/logical object
-logical objects -> relationships
-datasource -> field
-source relation -> field when metadata gives an exact origin
-field -> calculation -> calculated field
-field -> worksheet -> dashboard
+```mermaid
+flowchart LR
+    connection["Connection"] --> initial["Initial SQL"] --> datasource["Datasource"]
+    source["Source table"] --> custom["Custom SQL"]
+    physical["Physical / custom / join"] --> datasource
+    physical --> logical["Logical object"]
+    logical --> relationships["Relationships"]
+    datasource --> field["Field"]
+    source -->|exact metadata origin| field
+    field --> calculation["Calculation"] --> calculated["Calculated field"]
+    field --> worksheet["Worksheet"] --> dashboard["Dashboard"]
 ```
 
 Structural/coarse edges and precise origin edges have distinct kinds. SQL source extraction uses a
@@ -161,8 +168,11 @@ supplies the exact instance. It does not guess or synthesize persisted cross-she
 
 The runtime flow is:
 
-```text
-open once -> parse/index once -> indexed queries -> emit candidate
+```mermaid
+flowchart LR
+    open["Open once"] --> parse["Parse / index once"]
+    parse --> query["Indexed queries"]
+    query --> candidate["Emit candidate"]
 ```
 
 The release profile harness separately measures parse/index, lineage build, exact lineage lookup,

@@ -18,3 +18,16 @@ Repository-level files remain in the project root:
 - `README.md` — build, run, MCP tools, supported scope, and current limits.
 - `CHANGELOG.md` — release changes.
 - `SECURITY.md` — vulnerability reporting policy.
+
+## Local documentation build
+
+The published site uses mdBook 0.5.4 and mdbook-mermaid 0.17.1.
+
+```bash
+cargo install mdbook --version 0.5.4 --locked
+cargo install mdbook-mermaid --version 0.17.1 --locked
+mdbook-mermaid install .
+mdbook build
+```
+
+`mdbook-mermaid install .` writes the Mermaid browser assets referenced by `book.toml`.

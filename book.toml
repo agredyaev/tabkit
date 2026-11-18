@@ -12,3 +12,7 @@ build-dir = "target/site"
 git-repository-url = "https://github.com/agredyaev/tabkit"
 edit-url-template = "https://github.com/agredyaev/tabkit/edit/main/{path}"
 no-section-label = true
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"

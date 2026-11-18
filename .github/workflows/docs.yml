@@ -34,6 +34,12 @@ jobs:
           tar -xzf /tmp/mdbook.tar.gz -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Install mdBook Mermaid 0.17.1
+        run: cargo install mdbook-mermaid --version 0.17.1 --locked
+
+      - name: Prepare Mermaid assets
+        run: mdbook-mermaid install .
+
       - name: Build mdBook
         run: mdbook build
 
