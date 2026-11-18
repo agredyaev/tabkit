@@ -24,7 +24,7 @@ pub struct Analysis {
     pub warnings: Vec<String>,
 }
 
-/// Performs the lexical checks required before TapKit authors a calculation.
+/// Performs the lexical checks required before TabKit authors a calculation.
 ///
 /// Input is limited to 128 KiB. The scan rejects malformed lexical structure,
 /// statement separators, NUL, and external execution functions. Successful

@@ -25,13 +25,13 @@ const TABLEAU_JS: &str = include_str!("../extension/vendor/tableau.extensions.1.
 
 #[derive(Parser)]
 #[command(name = "tabkit-extension-host")]
-#[command(about = "Static Tableau Dashboard Extension host for TapKit")]
+#[command(about = "Static Tableau Dashboard Extension host for TabKit")]
 struct Args {
     /// HTTP bind address. Put TLS in front of this listener for production.
     #[arg(long, default_value = "127.0.0.1:8765")]
     bind: SocketAddr,
 
-    /// URL prefix used by a reverse proxy, for example /tapkit.
+    /// URL prefix used by a reverse proxy, for example /tabkit.
     #[arg(long, default_value = "")]
     base_path: String,
 
@@ -92,7 +92,7 @@ async fn run() -> tabkit::Result<()> {
         })?;
 
     println!(
-        "TapKit extension host listening on http://{}{}",
+        "TabKit extension host listening on http://{}{}",
         args.bind, base_path
     );
     axum::serve(listener, app)
@@ -225,10 +225,10 @@ mod tests {
     fn base_path_is_bounded() -> tabkit::Result<()> {
         assert_eq!(normalize_base_path("")?, "");
         assert_eq!(normalize_base_path("/")?, "");
-        assert_eq!(normalize_base_path("/tapkit")?, "/tapkit");
-        assert!(normalize_base_path("tapkit").is_err());
-        assert!(normalize_base_path("/tapkit/").is_err());
-        assert!(normalize_base_path("/../tapkit").is_err());
+        assert_eq!(normalize_base_path("/tabkit")?, "/tabkit");
+        assert!(normalize_base_path("tabkit").is_err());
+        assert!(normalize_base_path("/tabkit/").is_err());
+        assert!(normalize_base_path("/../tabkit").is_err());
         Ok(())
     }
 
@@ -244,14 +244,14 @@ mod tests {
                 signing_key: Some(Arc::new(key.clone())),
                 unsigned_localhost: false,
             },
-            "/tapkit",
+            "/tabkit",
         );
 
         let response = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/tapkit/healthz")
+                    .uri("/tabkit/healthz")
                     .body(Body::empty())
                     .map_err(|error| Error::new("TEST", error.to_string()))?,
             )
@@ -267,7 +267,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri("/tapkit/host.html")
+                    .uri("/tabkit/host.html")
                     .body(Body::empty())
                     .map_err(|error| Error::new("TEST", error.to_string()))?,
             )
@@ -306,7 +306,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/tapkit/verify")
+                    .uri("/tabkit/verify")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(good))
                     .map_err(|error| Error::new("TEST", error.to_string()))?,
@@ -323,7 +323,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/tapkit/verify")
+                    .uri("/tabkit/verify")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(bad))
                     .map_err(|error| Error::new("TEST", error.to_string()))?,

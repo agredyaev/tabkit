@@ -38,7 +38,7 @@ jobs:
         run: |
           node --check extension/host.js
           node --check extension/vendor/tableau.extensions.1.17.0.min.js
-          python3 -c "import xml.etree.ElementTree as ET; ET.parse('extension/tapkit-web-dashboard.trex')"
+          python3 -c "import xml.etree.ElementTree as ET; ET.parse('extension/tabkit-web-dashboard.trex')"
           ! grep -R "tableau.extensions.1.latest.min.js" extension docs README.md
 
   test:

@@ -1,6 +1,6 @@
 # Authoring
 
-TapKit authors a bounded Tableau 2026.2.4 subset through semantic edit operations. MCP clients provide typed intent, not Tableau XML, node IDs, zone IDs, or XML paths.
+TabKit authors a bounded Tableau 2026.2.4 subset through semantic edit operations. MCP clients provide typed intent, not Tableau XML, node IDs, zone IDs, or XML paths.
 
 ## Edit operations
 
@@ -136,15 +136,15 @@ Example:
 
 ## Web dashboards
 
-`create_web_dashboard` creates a fixed-size Tableau dashboard whose presentation surface is one full-canvas TapKit Dashboard Extension.
+`create_web_dashboard` creates a fixed-size Tableau dashboard whose presentation surface is one full-canvas TabKit Dashboard Extension.
 
-HTML, CSS, and JavaScript are stored as a versioned base64-encoded UTF-8 JSON bundle in `tapkit.bundle_b64`. Runtime version 1 is current. The unencoded HTML/CSS/JavaScript payload is limited to 1 MiB and the serialized bundle is bounded separately.
+HTML, CSS, and JavaScript are stored as a versioned base64-encoded UTF-8 JSON bundle in `tabkit.bundle_b64`. Runtime version 1 is current. The unencoded HTML/CSS/JavaScript payload is limited to 1 MiB and the serialized bundle is bounded separately.
 
-Remote production authoring requires `TABKIT_EXTENSION_SIGNING_KEY`, a base64 32-byte key. TapKit stores an HMAC-SHA256 under `tapkit.bundle_mac`; the extension host verifies it before execution. Unsigned bundles are accepted only for localhost development.
+Remote production authoring requires `TABKIT_EXTENSION_SIGNING_KEY`, a base64 32-byte key. TabKit stores an HMAC-SHA256 under `tabkit.bundle_mac`; the extension host verifies it before execution. Unsigned bundles are accepted only for localhost development.
 
 The default development host is `http://localhost:8765/host.html`. Remote `extension_url` values must be valid absolute HTTPS URLs. User-info and malformed hostless URLs are rejected.
 
-Generated code runs in a sanitized sandboxed iframe and receives the narrow `window.tapkit` bridge instead of direct access to `tableau.extensions`. Data-source reads use Tableau Full Data Access APIs; worksheet summary/filter methods remain available for hybrid dashboards.
+Generated code runs in a sanitized sandboxed iframe and receives the narrow `window.tabkit` bridge instead of direct access to `tableau.extensions`. Data-source reads use Tableau Full Data Access APIs; worksheet summary/filter methods remain available for hybrid dashboards.
 
 Example:
 
@@ -154,10 +154,10 @@ Example:
   "name": "Executive Overview",
   "width": 1440,
   "height": 900,
-  "extension_url": "https://bi.example.com/tapkit/host.html",
+  "extension_url": "https://bi.example.com/tabkit/host.html",
   "html": "<main id=\"app\"></main>",
   "css": "#app { display: grid; }",
-  "javascript": "const sources = await tapkit.listDataSources();"
+  "javascript": "const sources = await tabkit.listDataSources();"
 }
 ```
 
@@ -183,4 +183,4 @@ This keeps each candidate reparsed and indexed before it becomes a dependency of
 
 Local authoring enforces supported semantic preconditions, source-preserving patch checks, and post-edit reparse checks.
 
-The official Tableau 2026.2.0 XSD is the structural contract. TapKit does not vendor or reimplement it. Tableau REST 3.29 `validateWorkbook` remains the final XSD and semantic validation authority before publish.
+The official Tableau 2026.2.0 XSD is the structural contract. TabKit does not vendor or reimplement it. Tableau REST 3.29 `validateWorkbook` remains the final XSD and semantic validation authority before publish.

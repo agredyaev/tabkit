@@ -59,7 +59,7 @@ impl Config {
             self.api_version == REST_API_VERSION,
             "CONFIG",
             format!(
-                "TapKit targets Tableau REST {REST_API_VERSION} (Server {TABLEAU_PRODUCT_TARGET})"
+                "TabKit targets Tableau REST {REST_API_VERSION} (Server {TABLEAU_PRODUCT_TARGET})"
             ),
         )?;
         require(
@@ -111,7 +111,7 @@ impl Rest {
     /// Creates an HTTPS-only Tableau session from PAT configuration.
     ///
     /// The secret is read from `Config::pat_secret_env`; it is not stored in the
-    /// configuration value or surfaced in TapKit errors. Redirects are disabled
+    /// configuration value or surfaced in TabKit errors. Redirects are disabled
     /// so credentials are never forwarded to a different origin.
     pub fn sign_in(config: Config) -> Result<Self> {
         config.validate()?;

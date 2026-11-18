@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const CHANNEL = "tapkit-web-dashboard";
+  const CHANNEL = "tabkit-web-dashboard";
   const BRIDGE_VERSION = 1;
   const RUNTIME_VERSION = 1;
   const MAX_ROWS = 100000;
@@ -50,7 +50,7 @@
 
   async function verifyBundle(bundleB64, mac) {
     if (!mac && isLoopbackHost()) return;
-    if (!mac) throw new Error("TapKit dashboard signature is missing");
+    if (!mac) throw new Error("TabKit dashboard signature is missing");
 
     let response;
     try {
@@ -64,27 +64,27 @@
         referrerPolicy: "no-referrer"
       });
     } catch {
-      throw new Error("TapKit dashboard signature verification endpoint is unavailable");
+      throw new Error("TabKit dashboard signature verification endpoint is unavailable");
     }
     if (response.status !== 204) {
-      throw new Error("TapKit dashboard signature verification failed");
+      throw new Error("TabKit dashboard signature verification failed");
     }
   }
 
   function decodeBundle(value) {
-    if (!value) throw new Error("TapKit extension setting tapkit.bundle_b64 is missing");
+    if (!value) throw new Error("TabKit extension setting tabkit.bundle_b64 is missing");
     if (value.length > MAX_BUNDLE_B64_BYTES) {
-      throw new Error("TapKit dashboard bundle exceeds the encoded runtime limit");
+      throw new Error("TabKit dashboard bundle exceeds the encoded runtime limit");
     }
 
     let binary;
     try {
       binary = atob(value);
     } catch {
-      throw new Error("TapKit dashboard bundle is not valid base64");
+      throw new Error("TabKit dashboard bundle is not valid base64");
     }
     if (binary.length > MAX_BUNDLE_BYTES) {
-      throw new Error("TapKit dashboard bundle exceeds the decoded runtime limit");
+      throw new Error("TabKit dashboard bundle exceeds the decoded runtime limit");
     }
 
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
@@ -92,18 +92,18 @@
     try {
       parsed = JSON.parse(decoder.decode(bytes));
     } catch {
-      throw new Error("TapKit dashboard bundle is not valid UTF-8 JSON");
+      throw new Error("TabKit dashboard bundle is not valid UTF-8 JSON");
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("TapKit dashboard bundle is invalid");
+      throw new Error("TabKit dashboard bundle is invalid");
     }
     const keys = Object.keys(parsed);
     if (keys.some((key) => !["runtime_version", "html", "css", "javascript"].includes(key))) {
-      throw new Error("TapKit dashboard bundle contains unsupported fields");
+      throw new Error("TabKit dashboard bundle contains unsupported fields");
     }
     if (parsed.runtime_version !== RUNTIME_VERSION) {
       throw new Error(
-        `Unsupported TapKit dashboard runtime version ${JSON.stringify(parsed.runtime_version)}; host supports ${RUNTIME_VERSION}`
+        `Unsupported TabKit dashboard runtime version ${JSON.stringify(parsed.runtime_version)}; host supports ${RUNTIME_VERSION}`
       );
     }
 
@@ -114,10 +114,10 @@
       javascript: typeof parsed.javascript === "string" ? parsed.javascript : ""
     };
     if (!bundle.html && !bundle.javascript) {
-      throw new Error("TapKit dashboard bundle does not contain HTML or JavaScript");
+      throw new Error("TabKit dashboard bundle does not contain HTML or JavaScript");
     }
     if (byteSize(bundle.html) + byteSize(bundle.css) + byteSize(bundle.javascript) > MAX_INLINE_BYTES) {
-      throw new Error("TapKit inline dashboard exceeds the 1 MiB runtime limit");
+      throw new Error("TabKit inline dashboard exceeds the 1 MiB runtime limit");
     }
     return bundle;
   }
@@ -435,13 +435,13 @@
 
   function call(method, payload = {}) {
     if (pending.size >= MAX_PENDING) {
-      return Promise.reject(new Error("Too many concurrent TapKit requests"));
+      return Promise.reject(new Error("Too many concurrent TabKit requests"));
     }
     const id = String(nextId++);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new Error("TapKit bridge request timed out"));
+        reject(new Error("TabKit bridge request timed out"));
       }, REQUEST_TIMEOUT_MS);
       pending.set(id, { resolve, reject, timer });
       parent.postMessage({
@@ -471,7 +471,7 @@
       pending.delete(message.id);
       clearTimeout(waiter.timer);
       if (message.ok) waiter.resolve(message.result);
-      else waiter.reject(new Error(message.error || "TapKit bridge request failed"));
+      else waiter.reject(new Error(message.error || "TabKit bridge request failed"));
       return;
     }
     if (message.type === "event") {
@@ -479,7 +479,7 @@
     }
   });
 
-  window.tapkit = Object.freeze({
+  window.tabkit = Object.freeze({
     runtimeVersion: ${RUNTIME_VERSION},
     listWorksheets: () => call("worksheets.list"),
     getSummaryData: (worksheet, maxRows) => call("data.summary", { worksheet, maxRows }),
@@ -550,8 +550,8 @@ ${sanitizedHtml}
   async function start() {
     try {
       await tableau.extensions.initializeAsync();
-      const bundleB64 = setting("tapkit.bundle_b64");
-      const bundleMac = setting("tapkit.bundle_mac");
+      const bundleB64 = setting("tabkit.bundle_b64");
+      const bundleMac = setting("tabkit.bundle_mac");
       await verifyBundle(bundleB64, bundleMac);
       const bundle = decodeBundle(bundleB64);
 

@@ -1,6 +1,6 @@
 # Documentation
 
-Technical documentation for TapKit.
+Technical documentation for TabKit.
 
 - [Architecture](ARCHITECTURE.md) — runtime boundaries, workbook model, validation boundary, MCP and REST flow.
 - [Authoring](AUTHORING.md) — semantic edit operations, parameters, worksheet creation, actions, sequencing, and limits.

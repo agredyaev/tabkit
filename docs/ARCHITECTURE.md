@@ -1,4 +1,4 @@
-# TapKit architecture
+# TabKit architecture
 
 ## Runtime boundary
 
@@ -9,7 +9,7 @@ MCP client
    |
    +-- stateless Streamable HTTP (remote/Quick)
           |
-       TapKit state
+       TabKit state
           |
 REST download -> TWB/TWBX package
                    |
@@ -58,7 +58,7 @@ Blocking filesystem, XML, ZIP, and Tableau REST work is executed with `spawn_blo
 handlers so the Tokio HTTP runtime is not blocked. The process admits at most 64 live workbook
 handles. A RAII session permit is atomically reserved before download/edit/parse work begins and is
 released only when the final `Arc<Session>` drops, so concurrent requests cannot oversubscribe the
-limit. Callers release handles with `workbook_close`. Tableau-downloaded and TapKit-generated
+limit. Callers release handles with `workbook_close`. Tableau-downloaded and TabKit-generated
 candidate files are likewise session-owned and removed when the final Arc drops, so an in-flight
 validate/publish can safely outlive handle removal without leaking workspace files.
 
@@ -68,11 +68,11 @@ an explicit override, intended only for a protected private/VPC deployment.
 ## Tableau schema policy
 
 The official 2026.2.0 TWB XSD defines the external structural contract for the Tableau 2026.2.x line, including the 2026.2.4 target.
-TapKit does not vendor the XSD, generate a complete Rust model from it, or maintain a second local XSD
+TabKit does not vendor the XSD, generate a complete Rust model from it, or maintain a second local XSD
 validation engine. Only values required by the supported semantic surface are typed.
 
 The Tableau REST 3.29 `validateWorkbook` endpoint is the validation authority: Tableau validates the
-TWB against its XSD and performs semantic validation. For a TWBX, TapKit extracts and submits the
+TWB against its XSD and performs semantic validation. For a TWBX, TabKit extracts and submits the
 embedded TWB; package/resource correctness is ultimately exercised by the publish path.
 
 ## Lineage policy
@@ -102,7 +102,7 @@ reading `#temp` resolves to that same node. Edges distinguish physical/temp inpu
 SQL write, so the graph can represent `source table -> #temp -> Custom SQL -> Tableau field`.
 Unsupported T-SQL mutations preserve the safely known portion and emit
 `initial_sql_lineage_partial`. SQL Server `##global` temporary tables deliberately emit
-`global_temp_table_unsupported`; TapKit does not guess their cross-session/server scope.
+`global_temp_table_unsupported`; TabKit does not guess their cross-session/server scope.
 
 Unsupported Initial SQL or Custom SQL otherwise produces an explicit coverage gap rather than being
 guessed or silently dropped.
@@ -139,7 +139,7 @@ Other authored dependencies are intentionally sequential in the MVP. A newly cre
 
 Parameter authoring is limited to string/integer/real/boolean values with any/list/range domains. Worksheet authoring is limited to bar, line, KPI, and text-table structures over existing datasource fields. Unsupported combinations fail before patch application.
 
-Filter actions use Tableau's legacy `tsc:tsl-filter` action contract to filter the other compatible worksheets on a dashboard. Parameter actions use `edit-parameter-action` and require source/target datatype compatibility. TapKit does not infer action field mappings or synthesize persisted `Apply to Worksheets` state.
+Filter actions use Tableau's legacy `tsc:tsl-filter` action contract to filter the other compatible worksheets on a dashboard. Parameter actions use `edit-parameter-action` and require source/target datatype compatibility. TabKit does not infer action field mappings or synthesize persisted `Apply to Worksheets` state.
 
 Native dashboard design is expressed through nested rows/columns, fixed or weighted sizing, gaps,
 container/canvas padding, text, worksheet zones, filter cards, and supported zone styles. The
@@ -152,7 +152,7 @@ Worksheet presentation may be attached to the dashboard spec as a bounded set of
 font family/size/color, axis/grid/zero-line styling, mark size/line width, and label visibility.
 
 Dashboard filter cards are presentation objects over existing worksheet Filters-shelf semantics.
-TapKit scans/indexes each referenced worksheet's datasource dependencies and Filters shelf once per
+TabKit scans/indexes each referenced worksheet's datasource dependencies and Filters shelf once per
 edit batch, then resolves all cards from that index. It resolves the exact column-instance, verifies
 the source filter, copies required dependency metadata once per unique XML node, and emits filter
 zones in layout traversal order. Multiple matching column-instances are rejected unless the caller

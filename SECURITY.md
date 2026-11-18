@@ -18,13 +18,13 @@ Do not open a public issue for an unpatched vulnerability.
 
 ## Web dashboard extension
 
-Remote TapKit web dashboards are treated as trusted-code deployments, not as arbitrary untrusted workbook JavaScript.
+Remote TabKit web dashboards are treated as trusted-code deployments, not as arbitrary untrusted workbook JavaScript.
 
-Production authoring requires a base64 32-byte TABKIT_EXTENSION_SIGNING_KEY. TapKit signs the exact serialized dashboard bundle with HMAC-SHA256 and stores only the bundle plus MAC in the workbook. tabkit-extension-host verifies the MAC server-side before browser execution. Unsigned bundles are accepted only for loopback development.
+Production authoring requires a base64 32-byte TABKIT_EXTENSION_SIGNING_KEY. TabKit signs the exact serialized dashboard bundle with HMAC-SHA256 and stores only the bundle plus MAC in the workbook. tabkit-extension-host verifies the MAC server-side before browser execution. Unsigned bundles are accepted only for loopback development.
 
 Generated code runs in a sandboxed iframe without same-origin permission and does not receive the Tableau Extensions API object. Tableau access is mediated by the explicit host bridge. HTML is sanitized before sandbox load, bridge traffic is bounded, and the child CSP blocks external connections and subresources.
 
-The sandbox and CSP are defense in depth. Browser document navigation cannot be universally prohibited by CSP, so production safety relies on accepting only bundles signed by the trusted TapKit authoring path.
+The sandbox and CSP are defense in depth. Browser document navigation cannot be universally prohibited by CSP, so production safety relies on accepting only bundles signed by the trusted TabKit authoring path.
 
 Remote extension hosts must use HTTPS. Direct logical-table reads require Tableau Full Data Access and remain subject to Tableau user, workbook, and datasource permissions.
 

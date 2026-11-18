@@ -1,6 +1,6 @@
 # Performance
 
-Synthetic release benchmark for TapKit.
+Synthetic release benchmark for TabKit.
 
 Command:
 
@@ -11,7 +11,7 @@ cargo test --release perf::tests::runtime_profile -- \
 
 The benchmark generates Tableau 26.2 TWB files for the Tableau 2026.2.4 target with fields,
 calculated fields, worksheets, source SQL, and padding to the requested raw XML size. It measures
-TapKit itself; it does not include Tableau Server network latency.
+TabKit itself; it does not include Tableau Server network latency.
 
 ## Warm release run
 
@@ -23,7 +23,7 @@ TapKit itself; it does not include Tableau Server network latency.
 
 The edit measurements include source-preserving patching and the intentional full candidate
 reparse/postcondition check. The reparsed candidate `Workbook` is retained and handed to the caller,
-so TapKit no longer copies the whole candidate through `String -> Vec<u8> -> String` or reparses it
+so TabKit no longer copies the whole candidate through `String -> Vec<u8> -> String` or reparses it
 again merely to create an MCP candidate session.
 
 The 50 MiB edit cases use one iteration to keep the profile practical. Treat those values as

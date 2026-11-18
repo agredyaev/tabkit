@@ -2,7 +2,7 @@
 //!
 //! Edges are emitted only when the workbook structure or supported SQL analysis
 //! proves a relationship. Unsupported, ambiguous, or partial provenance becomes
-//! an explicit [`Gap`]; TapKit never fills a gap with a guessed edge.
+//! an explicit [`Gap`]; TabKit never fills a gap with a guessed edge.
 //!
 //! SQL Server local `#temp` tables are connection-scoped. They may link Initial
 //! SQL producers to Custom SQL consumers only within the same Tableau connection;
@@ -466,7 +466,7 @@ impl<'a> Builder<'a> {
                                         "global_temp_table_unsupported",
                                         connection.name.clone(),
                                         format!(
-                                            "SQL Server global temporary table {:?} is produced in Initial SQL; TapKit does not guess its server/session scope",
+                                            "SQL Server global temporary table {:?} is produced in Initial SQL; TabKit does not guess its server/session scope",
                                             write.target
                                         ),
                                     );
@@ -971,7 +971,7 @@ impl<'a> Builder<'a> {
                 "global_temp_table_unsupported",
                 context,
                 format!(
-                    "SQL Server global temporary table {name:?} is visible beyond one connection; TapKit does not guess its producer scope"
+                    "SQL Server global temporary table {name:?} is visible beyond one connection; TabKit does not guess its producer scope"
                 ),
             );
             return self.sql_table(datasource, name);

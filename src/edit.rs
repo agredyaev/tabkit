@@ -1,6 +1,6 @@
 //! Typed, source-preserving workbook edits.
 //!
-//! An edit batch is evaluated against one immutable [`Workbook`] base. TapKit
+//! An edit batch is evaluated against one immutable [`Workbook`] base. TabKit
 //! validates semantic preconditions first, lowers accepted operations to
 //! non-overlapping expected-source patches, applies them as one candidate, then
 //! reparses and checks operation-specific postconditions.
@@ -29,7 +29,7 @@ use std::{
 };
 
 const CANVAS: u32 = 100_000;
-const WEB_EXTENSION_ID: &str = "io.tapkit.web-dashboard";
+const WEB_EXTENSION_ID: &str = "io.tabkit.web-dashboard";
 const WEB_EXTENSION_VERSION: &str = "0.1.0";
 const WEB_DASHBOARD_RUNTIME_VERSION: u32 = 1;
 const WEB_DASHBOARD_MAX_INLINE_BYTES: usize = 1024 * 1024;
@@ -42,7 +42,7 @@ pub struct Batch {
     pub edits: Vec<Edit>,
 }
 
-/// Operations for which TapKit implements both admission checks and postconditions.
+/// Operations for which TabKit implements both admission checks and postconditions.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Edit {
@@ -217,7 +217,7 @@ pub struct DashboardSpec {
     pub layout: Layout,
 }
 
-/// Recursive layout tree normalized onto TapKit's fixed 100,000-unit canvas.
+/// Recursive layout tree normalized onto TabKit's fixed 100,000-unit canvas.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Layout {
@@ -681,7 +681,7 @@ pub fn apply(book: &Workbook, batch: &Batch, max_bytes: u64) -> Result<Candidate
         require(
             web_dashboard_postcondition(&reopened, name)?,
             "POSTCONDITION",
-            format!("Generated web dashboard {name:?} is missing its TapKit extension object"),
+            format!("Generated web dashboard {name:?} is missing its TabKit extension object"),
         )?;
     }
 
@@ -1882,7 +1882,7 @@ fn web_dashboard_parts(
         spec.extension_url
     );
     let dashboard = format!(
-        "\n    <dashboard enable-sort-zone-taborder=\"true\" name=\"{}\">\n      <style/>\n      <size maxheight=\"{}\" maxwidth=\"{}\" minheight=\"{}\" minwidth=\"{}\" sizing-mode=\"fixed\"/>\n      <zones>\n        <zone h=\"{CANVAS}\" id=\"{root_id}\" type-v2=\"layout-basic\" w=\"{CANVAS}\" x=\"0\" y=\"0\">\n          <zone forceUpdate=\"true\" h=\"{CANVAS}\" id=\"{extension_id}\" param=\"{}\" type=\"dashboard-object\" w=\"{CANVAS}\" x=\"0\" y=\"0\">\n            <add-in add-in-id=\"{WEB_EXTENSION_ID}\" extension-url=\"{}\" extension-version=\"{WEB_EXTENSION_VERSION}\" instance-id=\"{}\">\n              <instance-settings><setting key=\"tapkit.bundle_b64\" value=\"{}\"/><setting key=\"tapkit.bundle_mac\" value=\"{}\"/></instance-settings>\n              <type-settings><dashboard/></type-settings>\n            </add-in>\n          </zone>\n        </zone>\n      </zones>\n      <simple-id uuid=\"{}\"/>\n    </dashboard>",
+        "\n    <dashboard enable-sort-zone-taborder=\"true\" name=\"{}\">\n      <style/>\n      <size maxheight=\"{}\" maxwidth=\"{}\" minheight=\"{}\" minwidth=\"{}\" sizing-mode=\"fixed\"/>\n      <zones>\n        <zone h=\"{CANVAS}\" id=\"{root_id}\" type-v2=\"layout-basic\" w=\"{CANVAS}\" x=\"0\" y=\"0\">\n          <zone forceUpdate=\"true\" h=\"{CANVAS}\" id=\"{extension_id}\" param=\"{}\" type=\"dashboard-object\" w=\"{CANVAS}\" x=\"0\" y=\"0\">\n            <add-in add-in-id=\"{WEB_EXTENSION_ID}\" extension-url=\"{}\" extension-version=\"{WEB_EXTENSION_VERSION}\" instance-id=\"{}\">\n              <instance-settings><setting key=\"tabkit.bundle_b64\" value=\"{}\"/><setting key=\"tabkit.bundle_mac\" value=\"{}\"/></instance-settings>\n              <type-settings><dashboard/></type-settings>\n            </add-in>\n          </zone>\n        </zone>\n      </zones>\n      <simple-id uuid=\"{}\"/>\n    </dashboard>",
         escape_attr(&spec.name),
         spec.height,
         spec.width,
@@ -1976,7 +1976,7 @@ fn web_extension_reference_patch(book: &Workbook, specs: &[&WebDashboardSpec]) -
         })
         .collect::<String>();
 
-    if let Some(existing) = tapkit_referenced_extension(book)? {
+    if let Some(existing) = tabkit_referenced_extension(book)? {
         let existing_url = book
             .xml
             .descendants(existing)
@@ -1998,7 +1998,7 @@ fn web_extension_reference_patch(book: &Workbook, specs: &[&WebDashboardSpec]) -
                 span: Span::empty(at)?,
                 expected: String::new(),
                 replacement: views,
-                reason: "register TapKit web dashboard views".into(),
+                reason: "register TabKit web dashboard views".into(),
             });
         }
         let at = book.xml.closing_tag_start(existing)?;
@@ -2006,12 +2006,12 @@ fn web_extension_reference_patch(book: &Workbook, specs: &[&WebDashboardSpec]) -
             span: Span::empty(at)?,
             expected: String::new(),
             replacement: format!("<referenced-views>{views}</referenced-views>"),
-            reason: "register TapKit web dashboard views".into(),
+            reason: "register TabKit web dashboard views".into(),
         });
     }
 
     let referenced_extension = format!(
-        "\n    <referenced-extension>\n      <manifest manifest-version=\"0.1\">\n        <dashboard-extension extension-version=\"{WEB_EXTENSION_VERSION}\" id=\"{WEB_EXTENSION_ID}\">\n          <default-locale>en_US</default-locale>\n          <name resource-id=\"name\"/>\n          <description>TapKit sandboxed HTML and JavaScript dashboard host.</description>\n          <author email=\"noreply@tapkit.local\" name=\"TapKit\" organization=\"TapKit\" website=\"https://github.com/agredyaev/tabkit\"/>\n          <min-api-version>1.10</min-api-version>\n          <source-location><url>{}</url></source-location>\n          <icon>iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=</icon>\n          <permissions><permission>full data</permission></permissions>\n        </dashboard-extension>\n        <resources><resource id=\"name\"><text locale=\"en_US\">TapKit Web Dashboard</text></resource></resources>\n      </manifest>\n      <referenced-views>{views}</referenced-views>\n    </referenced-extension>",
+        "\n    <referenced-extension>\n      <manifest manifest-version=\"0.1\">\n        <dashboard-extension extension-version=\"{WEB_EXTENSION_VERSION}\" id=\"{WEB_EXTENSION_ID}\">\n          <default-locale>en_US</default-locale>\n          <name resource-id=\"name\"/>\n          <description>TabKit sandboxed HTML and JavaScript dashboard host.</description>\n          <author email=\"noreply@tabkit.local\" name=\"TabKit\" organization=\"TabKit\" website=\"https://github.com/agredyaev/tabkit\"/>\n          <min-api-version>1.10</min-api-version>\n          <source-location><url>{}</url></source-location>\n          <icon>iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=</icon>\n          <permissions><permission>full data</permission></permissions>\n        </dashboard-extension>\n        <resources><resource id=\"name\"><text locale=\"en_US\">TabKit Web Dashboard</text></resource></resources>\n      </manifest>\n      <referenced-views>{views}</referenced-views>\n    </referenced-extension>",
         escape_text(&first.extension_url),
     );
 
@@ -2020,7 +2020,7 @@ fn web_extension_reference_patch(book: &Workbook, specs: &[&WebDashboardSpec]) -
             span: Span::empty(book.xml.closing_tag_start(container)?)?,
             expected: String::new(),
             replacement: referenced_extension,
-            reason: "register TapKit web dashboard extension".into(),
+            reason: "register TabKit web dashboard extension".into(),
         });
     }
 
@@ -2030,11 +2030,11 @@ fn web_extension_reference_patch(book: &Workbook, specs: &[&WebDashboardSpec]) -
         replacement: format!(
             "\n  <referenced-extensions>{referenced_extension}\n  </referenced-extensions>"
         ),
-        reason: "register TapKit web dashboard extension".into(),
+        reason: "register TabKit web dashboard extension".into(),
     })
 }
 
-fn tapkit_referenced_extension(book: &Workbook) -> Result<Option<NodeId>> {
+fn tabkit_referenced_extension(book: &Workbook) -> Result<Option<NodeId>> {
     let Some(container) = book.root_child("referenced-extensions") else {
         return Ok(None);
     };
@@ -2095,14 +2095,14 @@ fn web_dashboard_postcondition(book: &Workbook, name: &str) -> Result<bool> {
             }
             "setting" => {
                 if let Some(key) = book.xml.attr(node, "key")? {
-                    bundle |= key.as_ref() == "tapkit.bundle_b64";
-                    bundle_mac |= key.as_ref() == "tapkit.bundle_mac";
+                    bundle |= key.as_ref() == "tabkit.bundle_b64";
+                    bundle_mac |= key.as_ref() == "tabkit.bundle_mac";
                 }
             }
             _ => {}
         }
     }
-    Ok(add_in && bundle && bundle_mac && tapkit_referenced_extension(book)?.is_some())
+    Ok(add_in && bundle && bundle_mac && tabkit_referenced_extension(book)?.is_some())
 }
 
 fn dashboard_parts<'a>(
@@ -4321,7 +4321,7 @@ mod tests {
         let html = "<main id=\"app\">Revenue</main>\n<section>Δ</section>";
         let css = "#app { display: grid; gap: 12px; }\nsection { font-weight: 600; }";
         let javascript =
-            "const sheets = await tapkit.listWorksheets();\nwindow.dashboardSheets = sheets;";
+            "const sheets = await tabkit.listWorksheets();\nwindow.dashboardSheets = sheets;";
 
         let candidate = apply(
             &book,
@@ -4344,7 +4344,7 @@ mod tests {
         assert!(
             candidate
                 .text()
-                .contains(r#"add-in-id="io.tapkit.web-dashboard""#)
+                .contains(r#"add-in-id="io.tabkit.web-dashboard""#)
         );
         assert!(
             candidate
@@ -4374,7 +4374,7 @@ mod tests {
             .descendants(dashboard.node)
             .find(|node| {
                 candidate.workbook.xml.tag(*node) == "setting"
-                    && candidate.workbook.xml.attr_raw(*node, "key") == Some("tapkit.bundle_b64")
+                    && candidate.workbook.xml.attr_raw(*node, "key") == Some("tabkit.bundle_b64")
             })
             .ok_or_else(|| Error::new("TEST", "web dashboard bundle setting is missing"))?;
         let encoded = candidate

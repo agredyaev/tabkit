@@ -1,6 +1,6 @@
 # Rust API map
 
-TapKit keeps the public Rust surface small. The code is organized by responsibility rather than by Tableau XML element.
+TabKit keeps the public Rust surface small. The code is organized by responsibility rather than by Tableau XML element.
 
 ## Core modules
 
@@ -14,7 +14,7 @@ TapKit keeps the public Rust surface small. The code is organized by responsibil
 | `edit` | Typed calculation, parameter, worksheet, action, native-dashboard, and web-dashboard authoring lowered into source-preserving XML patches | `Batch`, `Edit`, `apply`, `Candidate` |
 | `patch` | Admit, apply, and verify non-overlapping byte patches | `Patch`, `apply` |
 | `rest` | Tableau REST 3.29 authentication, search, download, validation, publish, and job polling | `Config`, `Rest` |
-| `mcp` | MCP server state and tool handlers built on `rmcp` | `TapKitMcp` |
+| `mcp` | MCP server state and tool handlers built on `rmcp` | `TabKitMcp` |
 
 ## Main data flow
 
@@ -36,7 +36,7 @@ Workbook + typed edit batch
 
 ## Validation ownership
 
-TapKit does not maintain a second Tableau XSD validator.
+TabKit does not maintain a second Tableau XSD validator.
 
 Local code is responsible for:
 - package and size limits;

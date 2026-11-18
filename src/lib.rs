@@ -4,7 +4,7 @@
 //!
 //! # Compatibility contract
 //!
-//! TapKit is pinned to TWB 26.2 and Tableau REST 3.29. It intentionally does not
+//! TabKit is pinned to TWB 26.2 and Tableau REST 3.29. It intentionally does not
 //! maintain a second Tableau XSD model or validator: the original TWB XML remains
 //! authoritative locally, and Tableau `validateWorkbook` is the final XSD and
 //! semantic validation boundary.
@@ -47,10 +47,10 @@ mod perf;
 
 use std::fmt;
 
-/// Result type used by TapKit public APIs.
+/// Result type used by TabKit public APIs.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// TapKit failure with a stable classification and a concrete diagnostic.
+/// TabKit failure with a stable classification and a concrete diagnostic.
 ///
 /// The symbolic code is the API contract. The message may gain detail over time
 /// and must not be parsed by clients.

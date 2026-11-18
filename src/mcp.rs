@@ -1,11 +1,11 @@
 //! MCP transport adapter and workbook-session owner.
 //!
-//! `rmcp` owns protocol framing. TapKit owns semantic tool behavior, bounded
-//! workbook handles, temporary candidate/download files, and mapping of TapKit
+//! `rmcp` owns protocol framing. TabKit owns semantic tool behavior, bounded
+//! workbook handles, temporary candidate/download files, and mapping of TabKit
 //! error codes to MCP categories.
 //!
 //! A handle keeps one immutable workbook snapshot alive. Edits create a new
-//! handle rather than mutating the source. TapKit-owned files are deleted only
+//! handle rather than mutating the source. TabKit-owned files are deleted only
 //! after the final in-flight `Arc<Session>` is released; user-supplied local files
 //! are never deleted by handle cleanup.
 
@@ -115,7 +115,7 @@ struct State {
 
 /// Cloneable MCP facade over one shared bounded session/workspace state.
 #[derive(Clone)]
-pub struct TapKitMcp {
+pub struct TabKitMcp {
     state: Arc<State>,
 }
 
@@ -196,13 +196,13 @@ struct PublishArgs {
     overwrite: bool,
 }
 
-impl TapKitMcp {
+impl TabKitMcp {
     /// Creates shared MCP state without authenticating to Tableau.
     ///
     /// Tableau configuration is validated immediately but sign-in is lazy on the
     /// first server-backed tool call. `allow_local_paths` controls only
     /// `workbook_open(path=...)`; downloaded and edited candidates always live in
-    /// TapKit's private temporary workspace. At most 64 workbook sessions may be
+    /// TabKit's private temporary workspace. At most 64 workbook sessions may be
     /// alive concurrently.
     pub fn new(tableau_config: Option<rest::Config>, allow_local_paths: bool) -> TapResult<Self> {
         if let Some(config) = &tableau_config {
@@ -247,7 +247,7 @@ impl TapKitMcp {
     async fn blocking<T, F>(&self, operation: F) -> std::result::Result<T, McpError>
     where
         T: Send + 'static,
-        F: FnOnce(TapKitMcp) -> TapResult<T> + Send + 'static,
+        F: FnOnce(TabKitMcp) -> TapResult<T> + Send + 'static,
     {
         let server = self.clone();
         tokio::task::spawn_blocking(move || operation(server))
@@ -421,7 +421,7 @@ impl TapKitMcp {
 }
 
 #[tool_router]
-impl TapKitMcp {
+impl TabKitMcp {
     #[tool(
         description = "Find Tableau workbooks by name on the configured Tableau Server 2026.2.4 site."
     )]
@@ -540,7 +540,7 @@ impl TapKitMcp {
     }
 
     #[tool(
-        description = "Run Tableau Server 2026.2.4 syntactic and semantic validation for the workbook XML. For a TWBX handle, TapKit sends the embedded TWB to Tableau validateWorkbook; packaged resources are checked by the publish path."
+        description = "Run Tableau Server 2026.2.4 syntactic and semantic validation for the workbook XML. For a TWBX handle, TabKit sends the embedded TWB to Tableau validateWorkbook; packaged resources are checked by the publish path."
     )]
     async fn workbook_validate(
         &self,
@@ -593,7 +593,7 @@ impl TapKitMcp {
     }
 
     #[tool(
-        description = "Release an in-memory workbook handle when it is no longer needed. User-provided local source files are never deleted; TapKit-owned download/candidate files are removed after the final in-flight session reference is released."
+        description = "Release an in-memory workbook handle when it is no longer needed. User-provided local source files are never deleted; TabKit-owned download/candidate files are removed after the final in-flight session reference is released."
     )]
     fn workbook_close(
         &self,
@@ -605,19 +605,19 @@ impl TapKitMcp {
 }
 
 #[tool_handler]
-impl ServerHandler for TapKitMcp {
+impl ServerHandler for TabKitMcp {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "TapKit is a headless Tableau Server 2026.2.4 workbook runtime. Open a workbook once, then use compact inspect/lineage/edit tools; do not request or generate raw Tableau XML.".to_owned(),
+                "TabKit is a headless Tableau Server 2026.2.4 workbook runtime. Open a workbook once, then use compact inspect/lineage/edit tools; do not request or generate raw Tableau XML.".to_owned(),
             )
     }
 }
 
 fn tool_error(error: Error) -> McpError {
     let message = format!("{}: {}", error.code, error.message);
-    let data = Some(json!({ "tapkit_code": error.code }));
+    let data = Some(json!({ "tabkit_code": error.code }));
 
     if error.code == "HANDLE_NOT_FOUND" {
         return McpError::resource_not_found(message, data);
@@ -689,9 +689,9 @@ fn json_result(value: &impl serde::Serialize) -> std::result::Result<CallToolRes
 
 /// Serves MCP over stdio until the transport closes.
 ///
-/// Protocol framing and lifecycle are delegated to `rmcp`; TapKit only maps
+/// Protocol framing and lifecycle are delegated to `rmcp`; TabKit only maps
 /// transport failures into the public `MCP` error class.
-pub async fn serve_stdio(server: TapKitMcp) -> TapResult<()> {
+pub async fn serve_stdio(server: TabKitMcp) -> TapResult<()> {
     use rmcp::{ServiceExt, transport::stdio};
 
     let service = server
@@ -705,7 +705,7 @@ pub async fn serve_stdio(server: TapKitMcp) -> TapResult<()> {
     Ok(())
 }
 
-fn http_router(server: TapKitMcp, bearer_token: Option<String>) -> axum::Router {
+fn http_router(server: TabKitMcp, bearer_token: Option<String>) -> axum::Router {
     use rmcp::transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     };
@@ -736,7 +736,7 @@ fn http_router(server: TapKitMcp, bearer_token: Option<String>) -> axum::Router 
 /// Passing `None` installs no authentication layer; callers are responsible for
 /// restricting such a listener to a trusted/loopback boundary.
 pub async fn serve_http(
-    server: TapKitMcp,
+    server: TabKitMcp,
     bind: std::net::SocketAddr,
     bearer_token: Option<String>,
 ) -> TapResult<()> {
@@ -799,7 +799,7 @@ mod tests {
         )
         .expect("fixture");
 
-        let server = TapKitMcp::new(None, true).expect("MCP server");
+        let server = TabKitMcp::new(None, true).expect("MCP server");
         let opened = server
             .insert_path(workbook_path.clone(), true)
             .expect("owned workbook");
@@ -838,7 +838,7 @@ mod tests {
         )
         .expect("fixture");
 
-        let server = TapKitMcp::new(None, true).expect("MCP server");
+        let server = TabKitMcp::new(None, true).expect("MCP server");
         let error = server
             .insert_path(workbook_path.clone(), true)
             .expect_err("26.3 must be rejected");
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn session_permits_enforce_the_hard_limit_and_recover_on_drop() {
-        let server = TapKitMcp::new(None, true).expect("MCP server");
+        let server = TabKitMcp::new(None, true).expect("MCP server");
         let mut permits = Vec::with_capacity(MAX_SESSIONS);
         for _ in 0..MAX_SESSIONS {
             permits.push(server.reserve_session().expect("session permit"));
@@ -908,7 +908,7 @@ mod tests {
         )
         .expect("fixture");
 
-        let server = TapKitMcp::new(None, true).expect("MCP server");
+        let server = TabKitMcp::new(None, true).expect("MCP server");
         let router = http_router(server, Some("secret".into()));
         let initialize = json!({
             "jsonrpc": "2.0",
@@ -1076,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_errors_preserve_tapkit_code_and_use_json_rpc_categories() {
+    fn tool_errors_preserve_tabkit_code_and_use_json_rpc_categories() {
         let missing = tool_error(Error::new(
             "HANDLE_NOT_FOUND",
             "Unknown workbook handle \"wb_missing\"",
@@ -1086,7 +1086,7 @@ mod tests {
             missing
                 .data
                 .as_ref()
-                .and_then(|value| value.get("tapkit_code"))
+                .and_then(|value| value.get("tabkit_code"))
                 .and_then(Value::as_str),
             Some("HANDLE_NOT_FOUND")
         );
@@ -1111,7 +1111,7 @@ mod tests {
             internal
                 .data
                 .as_ref()
-                .and_then(|value| value.get("tapkit_code"))
+                .and_then(|value| value.get("tabkit_code"))
                 .and_then(Value::as_str),
             Some("INTERNAL")
         );

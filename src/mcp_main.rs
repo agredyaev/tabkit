@@ -2,7 +2,7 @@ use clap::{Parser, ValueEnum};
 use std::{env, net::SocketAddr, time::Duration};
 use tabkit::{
     Error,
-    mcp::{self, TapKitMcp},
+    mcp::{self, TabKitMcp},
     rest,
 };
 
@@ -14,7 +14,7 @@ enum Transport {
 
 #[derive(Parser)]
 #[command(name = "tabkit-mcp")]
-#[command(about = "TapKit MCP server for Tableau Server 2026.2.4")]
+#[command(about = "TabKit MCP server for Tableau Server 2026.2.4")]
 struct Args {
     #[arg(long, value_enum, default_value_t = Transport::Stdio)]
     transport: Transport,
@@ -84,7 +84,7 @@ async fn run() -> tabkit::Result<()> {
     };
 
     let allow_local_paths = args.allow_local_paths || matches!(args.transport, Transport::Stdio);
-    let server = TapKitMcp::new(tableau_config, allow_local_paths)?;
+    let server = TabKitMcp::new(tableau_config, allow_local_paths)?;
 
     let bearer_token = match env::var(&args.http_bearer_token_env) {
         Ok(value) if !value.trim().is_empty() => Some(value),

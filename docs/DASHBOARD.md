@@ -2,8 +2,8 @@
 
 This document covers `create_dashboard`. For single-extension HTML/CSS/JavaScript dashboards, see [Web dashboard extension](WEB_DASHBOARD.md).
 
-TapKit native dashboard authoring is a semantic layout compiler. The caller specifies layout, sizing,
-styles, worksheet references, filter cards, and selected worksheet formatting. TapKit owns Tableau
+TabKit native dashboard authoring is a semantic layout compiler. The caller specifies layout, sizing,
+styles, worksheet references, filter cards, and selected worksheet formatting. TabKit owns Tableau
 zone IDs, normalized coordinates, dashboard dependencies, dashboard windows/viewpoints, and XML
 ordering.
 
@@ -186,7 +186,7 @@ Text zones support:
 - mark line/size value
 - mark label visibility
 
-TapKit emits worksheet/table/pane style rules as source-preserving patches.
+TabKit emits worksheet/table/pane style rules as source-preserving patches.
 
 ## Filter cards
 
@@ -219,7 +219,7 @@ Supported value domains (optional; omit to preserve the native card default):
 - `relevant` -> Tableau `values="relevant"`
 
 The filter card is deliberately conservative. The source worksheet must already contain the field
-on its Filters shelf and expose a matching `column-instance`. TapKit then:
+on its Filters shelf and expose a matching `column-instance`. TabKit then:
 
 1. resolves the source worksheet and field through the typed workbook index;
 2. resolves the exact Tableau column-instance;
@@ -228,11 +228,11 @@ on its Filters shelf and expose a matching `column-instance`. TapKit then:
 5. emits the dashboard filter zone at the requested position.
 
 If a worksheet has more than one column-instance for the same field, pass the exact `instance`.
-TapKit does not guess.
+TabKit does not guess.
 
 ### Filter and action boundary
 
-A filter card controls its source worksheet's existing Filters-shelf filter. TapKit does not synthesize
+A filter card controls its source worksheet's existing Filters-shelf filter. TabKit does not synthesize
 Tableau's persisted `Apply to Worksheets` sharing state.
 
 Cross-sheet interaction is available through `create_filter_action`. The source worksheet must

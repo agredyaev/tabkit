@@ -11,11 +11,11 @@ TabKit is a headless Tableau 2026.2.4 workbook runtime and MCP server.
 - Tableau workbook XSD contract: **2026.2.0**
 - Rust: **1.89+**
 
-TapKit does not ship a second Tableau schema validator. It keeps a small typed projection of the workbook objects required for inspection, lineage, and supported edits. Final workbook validation is delegated to Tableau REST `validateWorkbook`.
+TabKit does not ship a second Tableau schema validator. It keeps a small typed projection of the workbook objects required for inspection, lineage, and supported edits. Final workbook validation is delegated to Tableau REST `validateWorkbook`.
 
 ## Scope
 
-TapKit supports:
+TabKit supports:
 
 - TWB and TWBX open/repack;
 - datasource, connection, relation, field, calculation, parameter, worksheet, and dashboard indexing;
@@ -32,7 +32,7 @@ TapKit supports:
 - Tableau publish and background job polling;
 - MCP over stdio and Streamable HTTP.
 
-TapKit does not automate Tableau Desktop.
+TabKit does not automate Tableau Desktop.
 
 ## Deployment binaries
 
@@ -151,7 +151,7 @@ tableau_search_workbooks
 
 ## Validation boundary
 
-TapKit performs local structural admission, indexing, edit preconditions, package integrity checks, stale-base checks, and post-edit reparse checks.
+TabKit performs local structural admission, indexing, edit preconditions, package integrity checks, stale-base checks, and post-edit reparse checks.
 
 Tableau Server remains the authority for Tableau workbook validity:
 
@@ -187,7 +187,7 @@ source table
 -> Tableau field
 ```
 
-Unsupported or ambiguous paths are returned as explicit lineage gaps. TapKit does not invent missing lineage.
+Unsupported or ambiguous paths are returned as explicit lineage gaps. TabKit does not invent missing lineage.
 
 ## Authoring
 
@@ -205,9 +205,9 @@ create_dashboard
 
 Worksheet creation is intentionally narrow: bar, line, KPI, and text-table views over existing datasource fields. Native dashboard creation supports nested rows/columns, fixed and weighted sizing, padding, gaps, text, worksheet zones, filter cards, and bounded worksheet presentation styles. `create_web_dashboard` instead emits one full-canvas Dashboard Extension object and runs a bounded HTML/CSS/JavaScript bundle in the bundled sandbox host.
 
-Dashboard filter cards expose filters that already exist on the source worksheet. Cross-sheet interaction is available through filter actions; TapKit does not synthesize persisted `Apply to Worksheets` sharing state.
+Dashboard filter cards expose filters that already exist on the source worksheet. Cross-sheet interaction is available through filter actions; TabKit does not synthesize persisted `Apply to Worksheets` sharing state.
 
-When a new object depends on another object created by TapKit, chain `workbook_edit` calls so the dependency exists on the source handle before it is referenced. See [Authoring](docs/AUTHORING.md).
+When a new object depends on another object created by TabKit, chain `workbook_edit` calls so the dependency exists on the source handle before it is referenced. See [Authoring](docs/AUTHORING.md).
 
 ## Current limits
 

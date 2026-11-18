@@ -1,10 +1,10 @@
-# TapKit extension deployment
+# TabKit extension deployment
 
-This guide deploys the TapKit Dashboard Extension host for Tableau Server 2026.2.4.
+This guide deploys the TabKit Dashboard Extension host for Tableau Server 2026.2.4.
 
-The production deployment uses one stable extension URL for every TapKit web dashboard:
+The production deployment uses one stable extension URL for every TabKit web dashboard:
 
-    https://tableau-mcp.company.net/tapkit/host.html
+    https://tableau-mcp.company.net/tabkit/host.html
 
 Dashboard-specific HTML, CSS, and JavaScript stay in the workbook. The host is a generic runtime and bridge.
 
@@ -21,18 +21,18 @@ The extension-host binary embeds host.html, host.css, host.js, and the pinned Ta
 
 Each authored web dashboard stores:
 
-    tapkit.bundle_b64
-    tapkit.bundle_mac
+    tabkit.bundle_b64
+    tabkit.bundle_mac
 
 The decoded bundle is JSON with runtime_version, html, css, and javascript fields. Runtime version 1 is the current contract.
 
 The public URL stays stable. Future compatible runtimes are selected by runtime_version; do not create /v1/host.html, /v2/host.html, and similar URLs unless the compatibility model changes.
 
-Production bundles are HMAC-SHA256 signed. The same 32-byte signing key must be configured on the TapKit process that authors the workbook and on tabkit-extension-host.
+Production bundles are HMAC-SHA256 signed. The same 32-byte signing key must be configured on the TabKit process that authors the workbook and on tabkit-extension-host.
 
 The signing key is never stored in the workbook and is never sent to the browser.
 
-Treat access to the TapKit authoring/signing process as a publisher privilege. Any caller that can submit `create_web_dashboard` to a signer can create code that will later run with the extension permissions of dashboard viewers. Do not expose the signing-enabled MCP endpoint to ordinary workbook viewers or untrusted authors.
+Treat access to the TabKit authoring/signing process as a publisher privilege. Any caller that can submit `create_web_dashboard` to a signer can create code that will later run with the extension permissions of dashboard viewers. Do not expose the signing-enabled MCP endpoint to ordinary workbook viewers or untrusted authors.
 
 ## 1. Generate the signing key
 
@@ -58,7 +58,7 @@ Do not put the key in Git, a workbook, a TREX file, a command line, or the rever
 
 Changing the key invalidates signatures in already authored workbooks. Re-sign or recreate affected web dashboards before rotating the key.
 
-## 2. Configure the TapKit authoring process
+## 2. Configure the TabKit authoring process
 
 The process that executes create_web_dashboard must receive the same key.
 
@@ -84,7 +84,7 @@ Extract:
 
 Example directory:
 
-    C:\TapKit\ExtensionHost\
+    C:\TabKit\ExtensionHost\
       tabkit-extension-host.exe
       EXTENSION_DEPLOYMENT.md
       LICENSE
@@ -94,12 +94,12 @@ Set the signing key in the service environment and start the host:
 
     $env:TABKIT_EXTENSION_SIGNING_KEY="<base64-key>"
 
-    C:\TapKit\ExtensionHost\tabkit-extension-host.exe --bind 127.0.0.1:8765 --base-path /tapkit
+    C:\TabKit\ExtensionHost\tabkit-extension-host.exe --bind 127.0.0.1:8765 --base-path /tabkit
 
 The local endpoints are:
 
-    http://127.0.0.1:8765/tapkit/host.html
-    http://127.0.0.1:8765/tapkit/healthz
+    http://127.0.0.1:8765/tabkit/host.html
+    http://127.0.0.1:8765/tabkit/healthz
 
 /healthz must return:
 
@@ -108,7 +108,7 @@ The local endpoints are:
 ### Linux
 
     export TABKIT_EXTENSION_SIGNING_KEY='<base64-key>'
-    ./tabkit-extension-host --bind 127.0.0.1:8765 --base-path /tapkit
+    ./tabkit-extension-host --bind 127.0.0.1:8765 --base-path /tabkit
 
 ## 4. Put HTTPS in front of the host
 
@@ -120,11 +120,11 @@ Recommended topology:
         |
         | HTTPS
         v
-    https://tableau-mcp.company.net/tapkit/host.html
+    https://tableau-mcp.company.net/tabkit/host.html
         |
         | reverse proxy
         v
-    http://127.0.0.1:8765/tapkit/host.html
+    http://127.0.0.1:8765/tabkit/host.html
         |
         v
     tabkit-extension-host
@@ -137,16 +137,16 @@ The host refuses a non-loopback bind when TABKIT_EXTENSION_SIGNING_KEY is missin
 
 ### Reverse-proxy requirements
 
-Preserve the /tapkit prefix when --base-path /tapkit is used.
+Preserve the /tabkit prefix when --base-path /tabkit is used.
 
 Proxy at least:
 
-    GET  /tapkit/host.html
-    GET  /tapkit/host.css
-    GET  /tapkit/host.js
-    GET  /tapkit/vendor/tableau.extensions.1.17.0.min.js
-    POST /tapkit/verify
-    GET  /tapkit/healthz
+    GET  /tabkit/host.html
+    GET  /tabkit/host.css
+    GET  /tabkit/host.js
+    GET  /tabkit/vendor/tableau.extensions.1.17.0.min.js
+    POST /tabkit/verify
+    GET  /tabkit/healthz
 
 Do not cache /verify. Do not add authentication redirects in front of host.html; iframe login redirects commonly break Tableau extension initialization. Use network controls, Tableau safe-listing, and the signed-bundle boundary instead.
 
@@ -156,7 +156,7 @@ The public production URL must use a certificate trusted by user browsers.
 
 From a normal workstation that will use Tableau, open:
 
-    https://tableau-mcp.company.net/tapkit/healthz
+    https://tableau-mcp.company.net/tabkit/healthz
 
 Expected response:
 
@@ -164,13 +164,13 @@ Expected response:
 
 Then open:
 
-    https://tableau-mcp.company.net/tapkit/host.html
+    https://tableau-mcp.company.net/tabkit/host.html
 
 Outside Tableau, the page can report that the Tableau extension context is unavailable. That is expected. The important checks are successful HTTPS loading, a trusted certificate, and no authentication redirect.
 
 ## 6. Configure Tableau Server
 
-TapKit is a network-enabled Dashboard Extension.
+TabKit is a network-enabled Dashboard Extension.
 
 Tableau Server requires network-enabled extensions to be explicitly safe-listed. Tableau also requires explicit permission for Full Data Access when an extension reads underlying data, table names, field names, or datasource metadata.
 
@@ -181,7 +181,7 @@ In Tableau Server:
 3. Ensure Allow extensions to run on this site is enabled.
 4. Under Enable Specific Extensions, add the exact host URL:
 
-       https://tableau-mcp.company.net/tapkit/host.html
+       https://tableau-mcp.company.net/tabkit/host.html
 
 5. Set Full Data Access to Allow.
 6. Choose whether Tableau should Show or Hide the user permission prompt according to the site policy.
@@ -194,23 +194,23 @@ Current Tableau documentation:
 - https://help.tableau.com/current/server/en-us/dashboard_extensions_server.htm
 - https://help.tableau.com/current/server/en-us/security_extensions.htm
 
-## 7. Author TapKit web dashboards with the stable URL
+## 7. Author TabKit web dashboards with the stable URL
 
-Use the same URL for all TapKit web dashboards. For example, create_web_dashboard should use:
+Use the same URL for all TabKit web dashboards. For example, create_web_dashboard should use:
 
-    extension_url = https://tableau-mcp.company.net/tapkit/host.html
+    extension_url = https://tableau-mcp.company.net/tabkit/host.html
 
-TapKit writes runtime_version 1, signs the serialized bundle, and stores the bundle plus MAC in the workbook.
+TabKit writes runtime_version 1, signs the serialized bundle, and stores the bundle plus MAC in the workbook.
 
 One host serves any number of dashboards and workbooks:
 
-    Sales workbook       -> same /tapkit/host.html -> signed bundle A
-    Finance workbook     -> same /tapkit/host.html -> signed bundle B
-    Operations workbook  -> same /tapkit/host.html -> signed bundle C
+    Sales workbook       -> same /tabkit/host.html -> signed bundle A
+    Finance workbook     -> same /tabkit/host.html -> signed bundle B
+    Operations workbook  -> same /tabkit/host.html -> signed bundle C
 
 ## 8. Publish and validate
 
-For the target Tableau Server 2026.2.4 environment, use the normal TapKit sequence:
+For the target Tableau Server 2026.2.4 environment, use the normal TabKit sequence:
 
     create_web_dashboard
     -> validateWorkbook
@@ -235,14 +235,14 @@ The production path enforces these boundaries:
 - HTML is sanitized before it enters the sandboxed document;
 - inline event handlers, embedded scripts, forms, frames, objects, and remote element URLs are removed from authored HTML;
 - generated JavaScript does not receive tableau.extensions;
-- Tableau access is exposed only through the explicit window.tapkit bridge;
+- Tableau access is exposed only through the explicit window.tabkit bridge;
 - bridge requests are size-bounded, concurrency-bounded, and time-bounded;
 - data reads are row-bounded and byte-bounded;
 - the child CSP blocks fetch/XHR/WebSocket and external subresources;
 - navigation is blocked where the browser Navigation API exposes a cancelable navigation event;
 - the signed-bundle trust boundary remains authoritative for arbitrary generated JavaScript.
 
-Do not describe the child iframe as an absolute network security boundary. Browser document navigation cannot be universally prohibited by CSP. Production safety relies on executing only bundles signed by the trusted TapKit authoring path.
+Do not describe the child iframe as an absolute network security boundary. Browser document navigation cannot be universally prohibited by CSP. Production safety relies on executing only bundles signed by the trusted TabKit authoring path.
 
 ## 10. Local development
 
@@ -271,11 +271,11 @@ Check:
 - Full Data Access is allowed;
 - the URL is not present on the global block list.
 
-### TapKit dashboard signature is missing
+### TabKit dashboard signature is missing
 
 The workbook was created without a production signature. Configure TABKIT_EXTENSION_SIGNING_KEY on the authoring process and recreate or re-sign the web dashboard.
 
-### TapKit dashboard signature verification failed
+### TabKit dashboard signature verification failed
 
 The host and authoring process are using different signing keys, or the bundle was changed after signing.
 
@@ -283,11 +283,11 @@ The host and authoring process are using different signing keys, or the bundle w
 
 Check that the reverse proxy forwards:
 
-    POST /tapkit/verify
+    POST /tabkit/verify
 
 to the extension-host process and does not redirect it to an authentication page.
 
-### Unsupported TapKit dashboard runtime version
+### Unsupported TabKit dashboard runtime version
 
 The workbook was authored for a runtime newer than the deployed host. Upgrade tabkit-extension-host. The public host.html URL does not need to change.
 

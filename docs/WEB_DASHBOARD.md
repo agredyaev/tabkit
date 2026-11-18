@@ -1,11 +1,11 @@
 # Web dashboard extension
 
-TapKit web dashboards use one Tableau Dashboard Extension object as the presentation surface.
+TabKit web dashboards use one Tableau Dashboard Extension object as the presentation surface.
 
     Tableau workbook
       -> datasource(s)
       -> dashboard
-           -> TapKit Web Dashboard extension
+           -> TabKit Web Dashboard extension
                 -> signed HTML/CSS/JavaScript bundle
 
 The web-dashboard path does not use the native row/column dashboard compiler. Tableau still owns the workbook, data sources, permissions, parameters, publish lifecycle, and extension zone. HTML/CSS/JavaScript owns presentation and local interaction.
@@ -14,7 +14,7 @@ The web-dashboard path does not use the native row/column dashboard compiler. Ta
 
 All compatible dashboards use one stable URL, for example:
 
-    https://bi.example.com/tapkit/host.html
+    https://bi.example.com/tabkit/host.html
 
 Do not create a different URL for each dashboard and do not version the public path for normal runtime changes.
 
@@ -53,7 +53,7 @@ See EXTENSION_DEPLOYMENT.md for the full Windows/Linux deployment and Tableau Se
 
 ## Authoring contract
 
-create_web_dashboard creates a fixed-size dashboard containing one full-canvas TapKit Dashboard Extension object.
+create_web_dashboard creates a fixed-size dashboard containing one full-canvas TabKit Dashboard Extension object.
 
 Example request:
 
@@ -62,21 +62,21 @@ Example request:
       "name": "Executive Overview",
       "width": 1440,
       "height": 900,
-      "extension_url": "https://bi.example.com/tapkit/host.html",
+      "extension_url": "https://bi.example.com/tabkit/host.html",
       "html": "<main id=\"app\"></main>",
       "css": "#app { width: 100vw; height: 100vh; }",
-      "javascript": "const sources = await tapkit.listDataSources();"
+      "javascript": "const sources = await tabkit.listDataSources();"
     }
 
 extension_url must be a valid absolute URL. Remote URLs must use HTTPS. HTTP is accepted only for localhost, 127.0.0.1, or ::1. User-info URLs, malformed hostless URLs, and fragments are rejected.
 
 HTML, CSS, and JavaScript are serialized as UTF-8 JSON with runtime_version, base64 encoded, and persisted under:
 
-    tapkit.bundle_b64
+    tabkit.bundle_b64
 
 Production also stores:
 
-    tapkit.bundle_mac
+    tabkit.bundle_mac
 
 The unencoded HTML/CSS/JavaScript payload is limited to 1 MiB. The serialized bundle is limited separately before it reaches the runtime.
 
@@ -88,9 +88,9 @@ Remote production authoring requires:
 
 The value is base64 for exactly 32 random bytes.
 
-TapKit signs the exact serialized bundle with HMAC-SHA256. tabkit-extension-host receives the same key and verifies the MAC through its same-origin /verify endpoint before host.js decodes or executes the dashboard.
+TabKit signs the exact serialized bundle with HMAC-SHA256. tabkit-extension-host receives the same key and verifies the MAC through its same-origin /verify endpoint before host.js decodes or executes the dashboard.
 
-This prevents a workbook author from editing tapkit.bundle_b64 and running arbitrary unsigned JavaScript under a safe-listed TapKit extension URL.
+This prevents a workbook author from editing tabkit.bundle_b64 and running arbitrary unsigned JavaScript under a safe-listed TabKit extension URL.
 
 Unsigned bundles are accepted only for loopback development.
 
@@ -110,7 +110,7 @@ The child is not granted same-origin access and does not receive tableau.extensi
 
 The child CSP denies external connections and external subresources. Navigation is also canceled where the browser Navigation API exposes a cancelable event.
 
-The iframe/CSP layer is defense in depth, not the primary trust boundary. CSP cannot universally prohibit every document-navigation path in every browser. Production safety therefore depends on executing only bundles signed by the trusted TapKit authoring path.
+The iframe/CSP layer is defense in depth, not the primary trust boundary. CSP cannot universally prohibit every document-navigation path in every browser. Production safety therefore depends on executing only bundles signed by the trusted TabKit authoring path.
 
 ## Bridge API
 
@@ -136,9 +136,9 @@ Parameter access:
 
 Events:
 
-    tapkit.on("filterChanged", handler)
-    tapkit.on("selectionChanged", handler)
-    tapkit.on("summaryDataChanged", handler)
+    tabkit.on("filterChanged", handler)
+    tabkit.on("selectionChanged", handler)
+    tabkit.on("summaryDataChanged", handler)
 
 ## Runtime limits
 

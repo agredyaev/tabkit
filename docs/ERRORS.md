@@ -1,6 +1,6 @@
 # Error contract
 
-TapKit errors have two parts:
+TabKit errors have two parts:
 
 ```text
 CODE: human-readable message
@@ -8,11 +8,11 @@ CODE: human-readable message
 
 The code is stable enough for clients to branch on. The message explains the concrete failed operation or violated precondition.
 
-For MCP errors, TapKit also places the code in:
+For MCP errors, TabKit also places the code in:
 
 ```json
 {
-  "tapkit_code": "WORKSHEET_NOT_FOUND"
+  "tabkit_code": "WORKSHEET_NOT_FOUND"
 }
 ```
 
@@ -20,13 +20,13 @@ under the JSON-RPC error `data` field.
 
 ## MCP mapping
 
-TapKit maps errors to standard JSON-RPC/MCP categories:
+TabKit maps errors to standard JSON-RPC/MCP categories:
 
 - missing workbook handle -> resource not found;
 - invalid tool input or unsupported workbook/edit precondition -> invalid params;
 - runtime state, transport, Tableau configuration, or upstream Tableau failures -> internal error.
 
-The original TapKit code is preserved in `data.tapkit_code`.
+The original TabKit code is preserved in `data.tabkit_code`.
 
 ## Main error groups
 
@@ -87,7 +87,7 @@ AUTH_CONFIG
 AUTH
 ```
 
-If Tableau returns a structured REST error, TapKit preserves the HTTP status and available Tableau `error.code`, `summary`, and `detail` in the message.
+If Tableau returns a structured REST error, TabKit preserves the HTTP status and available Tableau `error.code`, `summary`, and `detail` in the message.
 
 Example:
 
@@ -100,7 +100,7 @@ PAT values and Tableau session tokens are never added to error text.
 
 ### Internal invariants
 
-`INTERNAL` indicates a TapKit runtime invariant or poisoned shared state. These errors are not mapped to invalid MCP parameters.
+`INTERNAL` indicates a TabKit runtime invariant or poisoned shared state. These errors are not mapped to invalid MCP parameters.
 
 ## Lineage gaps
 
@@ -116,4 +116,4 @@ temp_table_producer_unresolved
 global_temp_table_unsupported
 ```
 
-TapKit does not convert an unresolved lineage path into guessed provenance.
+TabKit does not convert an unresolved lineage path into guessed provenance.

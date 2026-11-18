@@ -348,7 +348,7 @@ impl Workbook {
             version == TWB_VERSION,
             "VERSION",
             format!(
-                "TapKit targets Tableau {TABLEAU_PRODUCT_TARGET} workbooks (TWB version {TWB_VERSION}); got {version:?}"
+                "TabKit targets Tableau {TABLEAU_PRODUCT_TARGET} workbooks (TWB version {TWB_VERSION}); got {version:?}"
             ),
         )?;
 
@@ -658,7 +658,7 @@ impl Workbook {
 
     /// Summarizes the indexed subset of this workbook snapshot.
     ///
-    /// Counts describe TapKit's semantic index, not the full set of XML elements
+    /// Counts describe TabKit's semantic index, not the full set of XML elements
     /// permitted by Tableau's schema.
     pub fn summary(&self) -> Summary {
         Summary {
