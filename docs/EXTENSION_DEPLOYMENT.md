@@ -1,63 +1,73 @@
-# TabKit extension host deployment
+# TabKit extension host: Windows deployment handoff
 
-This guide deploys the TabKit HTML dashboard runtime on Windows.
+Use this guide to deploy the TabKit HTML dashboard runtime on a Windows VM.
 
-The host can run on the same Windows VM as the official Tableau MCP server. They are independent processes. They only need different local ports.
+The host can run on the same VM as the official Tableau MCP server. They are independent processes. The official Tableau MCP does not need to be changed; the two services only need different local ports.
 
-## What to deploy
+## Goal
 
-Use:
+At the end of this procedure, this URL must be available:
+
+    https://<public-host>/tabkit/host.html
+
+TabKit will use that value as `extension_url`.
+
+## Inputs
+
+Required:
+
+- `tabkit-extension-host-v0.9.0-windows-x64.zip`;
+- access to the Windows VM;
+- a public HTTPS hostname already used by the environment, or another approved HTTPS endpoint for the VM;
+- ability to add a route in the existing HTTPS reverse proxy/gateway;
+- Tableau Server site-administrator access, or a Tableau administrator who can update extension settings;
+- one base64-encoded 32-byte `TABKIT_EXTENSION_SIGNING_KEY`.
+
+The signing key must be the same on the TabKit authoring process and on `tabkit-extension-host.exe`. The official Tableau MCP does not use this key.
+
+If no key has been provided, generate one in PowerShell:
+
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $key = New-Object byte[] 32
+    $rng.GetBytes($key)
+    [Convert]::ToBase64String($key)
+
+Store and transfer the value through the normal secret-management channel. Do not put it in Git, the workbook, or the public URL.
+
+## 1. Start the host
+
+Extract:
 
     tabkit-extension-host-v0.9.0-windows-x64.zip
 
-The host is the shared runtime for HTML dashboards created by TabKit. One host URL can serve any number of TabKit workbooks.
-
-Production does not require installing the checked-in `.trex` file. TabKit writes the extension reference and production URL into the workbook. The `.trex` file is for localhost development.
-
-## 1. Configure the signing key
-
-Create one random 32-byte value and store its base64 form as:
-
-    TABKIT_EXTENSION_SIGNING_KEY
-
-The same value must be configured on:
-
-- the TabKit process that creates the HTML dashboard;
-- `tabkit-extension-host.exe`.
-
-Do not give this key to the official Tableau MCP server. Tableau MCP is not part of TabKit bundle signing.
-
-## 2. Start the host
-
-Extract the ZIP and run:
+Open PowerShell in the extracted directory and run:
 
     $env:TABKIT_EXTENSION_SIGNING_KEY="<base64-key>"
     .\tabkit-extension-host.exe --bind 127.0.0.1:8765 --base-path /tabkit
 
-Local endpoints:
+The process must stay running.
 
-    http://127.0.0.1:8765/tabkit/healthz
-    http://127.0.0.1:8765/tabkit/host.html
+Verify locally on the VM:
 
-`/healthz` must return:
+    Invoke-WebRequest http://127.0.0.1:8765/tabkit/healthz
+
+Expected body:
 
     ok
 
-Running the official Tableau MCP on the same VM is fine. Keep the two services on different local ports.
+The official Tableau MCP can continue running on the same VM on its existing port.
 
-## 3. Expose the host through HTTPS
+## 2. Publish the host through HTTPS
 
-Use the VM's existing reverse proxy, gateway, IIS proxy, or load balancer.
+Add one route to the VM's existing HTTPS reverse proxy or gateway:
 
-Example:
-
-    https://tableau-mcp.company.net/tabkit/*
+    https://<public-host>/tabkit/*
         ->
     http://127.0.0.1:8765/tabkit/*
 
 Preserve the `/tabkit` path.
 
-The following routes must work:
+These routes must pass through:
 
     GET  /tabkit/host.html
     GET  /tabkit/host.css
@@ -68,62 +78,87 @@ The following routes must work:
 
 Do not put an interactive login redirect in front of these routes.
 
-From a normal user workstation, verify:
+From a normal user workstation, not only from the VM, verify:
 
-    https://tableau-mcp.company.net/tabkit/healthz
+    Invoke-WebRequest https://<public-host>/tabkit/healthz
 
-Expected response:
+Expected body:
 
     ok
 
-The public URL must use HTTPS and a certificate trusted by user browsers.
+The HTTPS certificate must be trusted by the user browser.
 
-## 4. Allow the extension in Tableau Server
+## 3. Allow the extension in Tableau Server
 
-In the Tableau Server site:
+Open the Tableau Server site:
 
     Settings -> Extensions
 
 Then:
 
 1. enable extensions for the site;
-2. add the exact URL:
+2. under **Enable Specific Extensions**, add the exact URL:
 
-       https://tableau-mcp.company.net/tabkit/host.html
+       https://<public-host>/tabkit/host.html
 
-3. set Full Data Access to Allow;
-4. confirm the URL is not blocked by the server-level extension block list.
+3. set **Full Data Access** to **Allow**;
+4. choose **Show** or **Hide** for the user permission prompt according to site policy;
+5. confirm that the same URL is not blocked by the server-level extension block list.
 
-The browser that opens the Tableau dashboard must be able to reach the public host URL.
+Use the exact URL rather than a broad wildcard unless the wider trust scope is intentional.
 
-## 5. Use the URL from TabKit
-
-When TabKit creates an HTML dashboard, use:
-
-    extension_url = https://tableau-mcp.company.net/tabkit/host.html
-
-TabKit stores the dashboard HTML, CSS, and JavaScript inside the workbook as a signed bundle. The host loads and runs that bundle.
-
-The public host URL stays the same for all TabKit HTML dashboards.
-
-## Test flow
-
-    start host
-    -> check /healthz
-    -> add host.html to Tableau Server Extensions safe list
-    -> allow Full Data Access
-    -> create HTML dashboard with TabKit
-    -> validateWorkbook
-    -> publish
-    -> open the dashboard in a browser
-
-## Official Tableau documentation
+Official Tableau documentation:
 
 - Manage Dashboard and Viz Extensions in Tableau Server:
   https://help.tableau.com/current/server/en-us/dashboard_extensions_server.htm
 - Extension security:
   https://help.tableau.com/current/server/en-us/security_extensions.htm
-- Tableau Extension manifest:
-  https://tableau.github.io/extensions-api/docs/dashext/trex_manifest/
+- HTTPS and extension source locations:
+  https://tableau.github.io/extensions-api/docs/security/trex_security/
 - Full Data Access:
   https://tableau.github.io/extensions-api/docs/security/trex_data_access/
+
+Tableau documents Network-enabled extensions as web applications that must be explicitly allowed on the site. Tableau Server accepts Network-enabled extensions over HTTPS, except for localhost development, and Full Data Access must be explicitly allowed when the extension requires underlying data or datasource metadata.
+
+## 4. Return the deployment result
+
+Send the requester:
+
+    Extension URL:
+    https://<public-host>/tabkit/host.html
+
+    Health URL:
+    https://<public-host>/tabkit/healthz
+
+Also confirm:
+
+- health URL returns `ok` from a normal workstation;
+- the extension URL is present in the Tableau Server site safe list;
+- Full Data Access is set to Allow;
+- the URL is not on the server block list;
+- the host is using the agreed `TABKIT_EXTENSION_SIGNING_KEY`.
+
+Do not send the signing key in the deployment confirmation.
+
+## Definition of Done
+
+The host is ready when all of these are true:
+
+- [ ] `tabkit-extension-host.exe` is running on the Windows VM;
+- [ ] `http://127.0.0.1:8765/tabkit/healthz` returns `ok` on the VM;
+- [ ] `https://<public-host>/tabkit/healthz` returns `ok` from a user workstation;
+- [ ] `https://<public-host>/tabkit/host.html` opens without an authentication redirect or certificate error;
+- [ ] the exact `host.html` URL is allowed in Tableau Server **Settings -> Extensions**;
+- [ ] Full Data Access is **Allow**;
+- [ ] the URL is not blocked at server level;
+- [ ] the same signing key is configured on the host and the TabKit authoring process.
+
+Once these checks pass, return the `host.html` URL. No other host configuration is required for TabKit.
+
+## What TabKit does with the URL
+
+TabKit creates the Dashboard Extension reference inside the workbook and stores the dashboard HTML, CSS, and JavaScript as a signed workbook bundle.
+
+Production deployment does not require installing the checked-in `.trex` file. That file is for localhost development.
+
+One deployed host can serve multiple TabKit workbooks and dashboards.

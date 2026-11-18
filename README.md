@@ -41,7 +41,11 @@ Production deployment uses two binaries:
 - `tabkit-mcp` — MCP server;
 - `tabkit-extension-host` — embedded Tableau Dashboard Extension web host.
 
-The `tabkit` CLI remains available for local development and workbook operations. CI and GitHub releases do not publish it as a deployment artifact.
+The extension host may run on the same Windows VM as the official Tableau MCP server; they are independent services and use different local ports.
+
+For a handoff-ready Windows host procedure, use [TabKit extension host: Windows deployment handoff](docs/EXTENSION_DEPLOYMENT.md).
+
+The `tabkit` CLI remains available for local development and workbook operations.
 
 ## Build
 
