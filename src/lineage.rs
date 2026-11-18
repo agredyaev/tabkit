@@ -495,8 +495,20 @@ impl<'a> Builder<'a> {
                                             ),
                                         );
                                         self.sql_table(connection.datasource, source)
-                                    } else if canonical_temp_name(source).is_some() {
-                                        self.temp_table(connection.id, source)
+                                    } else if let Some(canonical) = canonical_temp_name(source) {
+                                        let source_node = self.temp_table(connection.id, source);
+                                        if write.unresolved_temp_sources.contains(&canonical) {
+                                            self.gap(
+                                                "temp_table_producer_unresolved",
+                                                connection.name.clone(),
+                                                format!(
+                                                    "Temporary table {source:?} feeds {:?} before a producer is resolved earlier in Initial SQL",
+                                                    write.target
+                                                ),
+                                            );
+                                            continue;
+                                        }
+                                        source_node
                                     } else {
                                         self.sql_table(connection.datasource, source)
                                     };
@@ -1150,6 +1162,7 @@ enum SqlFlavor {
 struct TempWrite {
     target: String,
     sources: BTreeSet<String>,
+    unresolved_temp_sources: BTreeSet<String>,
 }
 
 struct InitialSqlAnalysis {
@@ -1382,70 +1395,276 @@ fn select_into_temp(query: &Query) -> Option<String> {
         })
 }
 
+fn top_level_keyword(sql: &str, keyword: &str) -> Option<usize> {
+    let bytes = sql.as_bytes();
+    let keyword = keyword.as_bytes();
+    let mut index = 0usize;
+    let mut depth = 0u32;
+    let mut single_quote = false;
+    let mut double_quote = false;
+    let mut bracket = false;
+    let mut line_comment = false;
+    let mut block_comment = false;
+
+    while index < bytes.len() {
+        let current = bytes[index];
+        let next = bytes.get(index + 1).copied();
+
+        if line_comment {
+            if current == b'\n' {
+                line_comment = false;
+            }
+            index += 1;
+            continue;
+        }
+        if block_comment {
+            if current == b'*' && next == Some(b'/') {
+                block_comment = false;
+                index += 2;
+            } else {
+                index += 1;
+            }
+            continue;
+        }
+        if single_quote {
+            if current == b'\'' {
+                if next == Some(b'\'') {
+                    index += 2;
+                    continue;
+                }
+                single_quote = false;
+            }
+            index += 1;
+            continue;
+        }
+        if double_quote {
+            if current == b'"' {
+                if next == Some(b'"') {
+                    index += 2;
+                    continue;
+                }
+                double_quote = false;
+            }
+            index += 1;
+            continue;
+        }
+        if bracket {
+            if current == b']' {
+                if next == Some(b']') {
+                    index += 2;
+                    continue;
+                }
+                bracket = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        match (current, next) {
+            (b'-', Some(b'-')) => {
+                line_comment = true;
+                index += 2;
+                continue;
+            }
+            (b'/', Some(b'*')) => {
+                block_comment = true;
+                index += 2;
+                continue;
+            }
+            (b'\'', _) => {
+                single_quote = true;
+                index += 1;
+                continue;
+            }
+            (b'"', _) => {
+                double_quote = true;
+                index += 1;
+                continue;
+            }
+            (b'[', _) => {
+                bracket = true;
+                index += 1;
+                continue;
+            }
+            (b'(', _) => {
+                depth = depth.saturating_add(1);
+                index += 1;
+                continue;
+            }
+            (b')', _) => {
+                depth = depth.saturating_sub(1);
+                index += 1;
+                continue;
+            }
+            _ => {}
+        }
+
+        if depth == 0 && index + keyword.len() <= bytes.len() {
+            let candidate = &bytes[index..index + keyword.len()];
+            let before_ok =
+                index == 0 || !bytes[index - 1].is_ascii_alphanumeric() && bytes[index - 1] != b'_';
+            let after = index + keyword.len();
+            let after_ok = after == bytes.len()
+                || !bytes[after].is_ascii_alphanumeric() && bytes[after] != b'_';
+            if before_ok && after_ok && candidate.eq_ignore_ascii_case(keyword) {
+                return Some(index);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn mssql_cte_insert_temp(statement: &str) -> std::result::Result<Option<TempWrite>, ()> {
+    let statement = statement.trim();
+    if !statement
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("with"))
+    {
+        return Ok(None);
+    }
+
+    let Some(insert_at) = top_level_keyword(statement, "INSERT") else {
+        return Ok(None);
+    };
+    let cte_prefix = statement[..insert_at].trim();
+    let insert_sql = &statement[insert_at..];
+    let parsed = Parser::parse_sql(&MsSqlDialect {}, insert_sql).map_err(|_| ())?;
+    let [Statement::Insert(insert)] = parsed.as_slice() else {
+        return Err(());
+    };
+    let TableObject::TableName(table_name) = &insert.table else {
+        return Err(());
+    };
+    let Some(target) = canonical_any_temp_name(&table_name.to_string()) else {
+        return Ok(None);
+    };
+    let source = insert.source.as_ref().ok_or(())?;
+    let combined = format!("{cte_prefix} {source}");
+    let parsed_query = Parser::parse_sql(&MsSqlDialect {}, &combined).map_err(|_| ())?;
+    let [Statement::Query(query)] = parsed_query.as_slice() else {
+        return Err(());
+    };
+    Ok(Some(TempWrite {
+        target,
+        sources: query_reads(query)?,
+        unresolved_temp_sources: BTreeSet::new(),
+    }))
+}
+
 fn analyze_initial_sql(
     sql: &str,
     connection_class: Option<&str>,
 ) -> std::result::Result<InitialSqlAnalysis, ()> {
     let flavor = sql_flavor(connection_class, sql);
-    let statements = parse_statements(sql, flavor)?;
-    if statements.is_empty() {
-        return Err(());
-    }
-
     let mut direct_reads = BTreeSet::new();
     let mut temp_writes = Vec::new();
     let mut partial = false;
+    let mut statements_seen = 0usize;
 
-    for statement in statements {
-        match statement {
-            Statement::Query(query) => {
-                let reads = query_reads(&query)?;
-                if let Some(target) = select_into_temp(&query) {
+    let chunks = if matches!(flavor, SqlFlavor::MsSql) {
+        mssql_statement_chunks(sql)
+    } else {
+        vec![sql]
+    };
+
+    for chunk in chunks {
+        let chunk = chunk.trim();
+        if chunk.is_empty()
+            || matches!(flavor, SqlFlavor::MsSql) && is_mssql_lineage_neutral_setup(chunk)
+        {
+            continue;
+        }
+        if matches!(flavor, SqlFlavor::MsSql)
+            && let Some(write) = mssql_cte_insert_temp(chunk)?
+        {
+            statements_seen += 1;
+            temp_writes.push(write);
+            continue;
+        }
+
+        let statements = Parser::parse_sql(
+            match flavor {
+                SqlFlavor::Generic => &GenericDialect {} as &dyn sqlparser::dialect::Dialect,
+                SqlFlavor::MsSql => &MsSqlDialect {} as &dyn sqlparser::dialect::Dialect,
+            },
+            chunk,
+        )
+        .map_err(|_| ())?;
+
+        for statement in statements {
+            statements_seen += 1;
+            match statement {
+                Statement::Query(query) => {
+                    let reads = query_reads(&query)?;
+                    if let Some(target) = select_into_temp(&query) {
+                        temp_writes.push(TempWrite {
+                            target,
+                            sources: reads,
+                            unresolved_temp_sources: BTreeSet::new(),
+                        });
+                    } else {
+                        direct_reads.extend(reads);
+                    }
+                }
+                Statement::Insert(insert) => {
+                    let TableObject::TableName(table_name) = &insert.table else {
+                        partial = true;
+                        continue;
+                    };
+                    let Some(target) = canonical_any_temp_name(&table_name.to_string()) else {
+                        partial = true;
+                        continue;
+                    };
+                    let Some(source) = insert.source else {
+                        partial = true;
+                        continue;
+                    };
                     temp_writes.push(TempWrite {
                         target,
-                        sources: reads,
-                    });
-                } else {
-                    direct_reads.extend(reads);
-                }
-            }
-            Statement::Insert(insert) => {
-                let TableObject::TableName(table_name) = &insert.table else {
-                    partial = true;
-                    continue;
-                };
-                let Some(target) = canonical_any_temp_name(&table_name.to_string()) else {
-                    partial = true;
-                    continue;
-                };
-                let Some(source) = insert.source else {
-                    partial = true;
-                    continue;
-                };
-                temp_writes.push(TempWrite {
-                    target,
-                    sources: query_reads(&source)?,
-                });
-            }
-            Statement::CreateTable(create) => {
-                let Some(target) = canonical_any_temp_name(&create.name.to_string()) else {
-                    partial = true;
-                    continue;
-                };
-                if let Some(query) = create.query {
-                    temp_writes.push(TempWrite {
-                        target,
-                        sources: query_reads(&query)?,
+                        sources: query_reads(&source)?,
+                        unresolved_temp_sources: BTreeSet::new(),
                     });
                 }
+                Statement::CreateTable(create) => {
+                    let Some(target) = canonical_any_temp_name(&create.name.to_string()) else {
+                        partial = true;
+                        continue;
+                    };
+                    if let Some(query) = create.query {
+                        temp_writes.push(TempWrite {
+                            target,
+                            sources: query_reads(&query)?,
+                            unresolved_temp_sources: BTreeSet::new(),
+                        });
+                    }
+                }
+                Statement::Drop { names, .. }
+                    if names
+                        .iter()
+                        .all(|name| canonical_any_temp_name(&name.to_string()).is_some()) => {}
+                Statement::Declare { .. } | Statement::Set(_)
+                    if matches!(flavor, SqlFlavor::MsSql) => {}
+                _ => partial = true,
             }
-            Statement::Drop { names, .. }
-                if names
-                    .iter()
-                    .all(|name| canonical_any_temp_name(&name.to_string()).is_some()) => {}
-            Statement::Declare { .. } | Statement::Set(_) if matches!(flavor, SqlFlavor::MsSql) => {
+        }
+    }
+
+    if statements_seen == 0 {
+        return Err(());
+    }
+
+    let mut produced_temps = BTreeSet::new();
+    for write in &mut temp_writes {
+        for source in &write.sources {
+            if let Some(canonical) = canonical_temp_name(source)
+                && !produced_temps.contains(&canonical)
+            {
+                write.unresolved_temp_sources.insert(canonical);
             }
-            _ => partial = true,
+        }
+        if let Some(canonical) = canonical_temp_name(&write.target) {
+            produced_temps.insert(canonical);
         }
     }
 
@@ -1599,6 +1818,130 @@ mod tests {
         assert!(analysis.temp_writes[0].sources.contains("dbo.orders"));
         assert_eq!(analysis.temp_writes[1].target, "#b");
         assert!(analysis.temp_writes[1].sources.contains("#a"));
+        Ok(())
+    }
+
+    #[test]
+    fn mssql_initial_sql_cte_chain_resolves_physical_and_temp_sources() -> Result<()> {
+        let analysis = analyze_initial_sql(
+            "WITH base AS (
+                 SELECT o.id, o.amount, c.segment
+                 FROM dbo.orders o
+                 JOIN dbo.customers c ON o.customer_id = c.id
+             ), enriched AS (
+                 SELECT id, amount, segment FROM base
+             )
+             SELECT id, amount, segment INTO #stage FROM enriched;
+             WITH filtered AS (
+                 SELECT id, amount, segment FROM #stage WHERE amount > 0
+             )
+             SELECT id, amount, segment INTO #final FROM filtered;",
+            Some("sqlserver"),
+        )
+        .map_err(|_| Error::new("TEST", "MSSQL CTE/temp chain did not parse"))?;
+
+        assert!(!analysis.partial);
+        assert!(analysis.direct_reads.is_empty());
+        assert_eq!(analysis.temp_writes.len(), 2);
+        assert_eq!(analysis.temp_writes[0].target, "#stage");
+        assert_eq!(
+            analysis.temp_writes[0]
+                .sources
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["dbo.customers".to_owned(), "dbo.orders".to_owned()]
+        );
+        assert_eq!(analysis.temp_writes[1].target, "#final");
+        assert_eq!(
+            analysis.temp_writes[1]
+                .sources
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["#stage".to_owned()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mssql_initial_sql_mixes_direct_reads_with_cte_temp_writes() -> Result<()> {
+        let analysis = analyze_initial_sql(
+            "SELECT tenant_id FROM dbo.bootstrap;
+             WITH base AS (SELECT id FROM dbo.orders)
+             SELECT id INTO #stage FROM base;",
+            Some("sqlserver"),
+        )
+        .map_err(|_| Error::new("TEST", "mixed Initial SQL did not parse"))?;
+
+        assert!(!analysis.partial);
+        assert_eq!(
+            analysis.direct_reads.into_iter().collect::<Vec<_>>(),
+            vec!["dbo.bootstrap".to_owned()]
+        );
+        assert_eq!(analysis.temp_writes.len(), 1);
+        assert_eq!(analysis.temp_writes[0].target, "#stage");
+        assert_eq!(
+            analysis.temp_writes[0]
+                .sources
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["dbo.orders".to_owned()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mssql_create_insert_cte_chain_tracks_temp_dependencies() -> Result<()> {
+        let analysis = analyze_initial_sql(
+            "CREATE TABLE #stage (id INT);
+             WITH base AS (SELECT id FROM dbo.orders)
+             INSERT INTO #stage (id) SELECT id FROM base;
+             SELECT id INTO #final FROM #stage;",
+            Some("sqlserver"),
+        )
+        .map_err(|_| Error::new("TEST", "CREATE/INSERT CTE temp chain did not parse"))?;
+
+        assert!(!analysis.partial);
+        assert_eq!(analysis.temp_writes.len(), 2);
+        assert_eq!(analysis.temp_writes[0].target, "#stage");
+        assert_eq!(
+            analysis.temp_writes[0]
+                .sources
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["dbo.orders".to_owned()]
+        );
+        assert_eq!(analysis.temp_writes[1].target, "#final");
+        assert_eq!(
+            analysis.temp_writes[1]
+                .sources
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["#stage".to_owned()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mssql_forward_or_missing_temp_source_is_marked_unresolved() -> Result<()> {
+        let analysis = analyze_initial_sql(
+            "SELECT id INTO #final FROM #stage;
+             SELECT id INTO #stage FROM dbo.orders;",
+            Some("sqlserver"),
+        )
+        .map_err(|_| Error::new("TEST", "forward temp chain did not parse"))?;
+
+        assert_eq!(analysis.temp_writes.len(), 2);
+        assert!(
+            analysis.temp_writes[0]
+                .unresolved_temp_sources
+                .contains("#stage")
+        );
+        assert!(analysis.temp_writes[1].unresolved_temp_sources.is_empty());
         Ok(())
     }
 
@@ -1888,6 +2231,156 @@ mod integration_tests {
     }
 
     #[test]
+    fn mssql_cte_temp_chain_traces_to_visualization_without_alias_leakage() -> Result<()> {
+        let workbook = Workbook::open(
+            br#"<workbook version="26.2" source-build="20262.test">
+  <datasources>
+    <datasource inline="true" name="Orders" version="26.2">
+      <connection class="sqlserver" name="sqlserver.1" one-time-sql="WITH base AS (SELECT o.id, o.amount, c.segment FROM dbo.orders o JOIN dbo.customers c ON o.customer_id = c.id), enriched AS (SELECT id, amount, segment FROM base) SELECT id, amount, segment INTO #stage FROM enriched; WITH filtered AS (SELECT id, amount, segment FROM #stage WHERE amount &gt; 0) SELECT id, amount, segment INTO #final FROM filtered">
+        <relation connection="sqlserver.1" name="Final SQL" type="text">WITH final_cte AS (SELECT id, amount, segment FROM #final) SELECT id, amount, segment FROM final_cte</relation>
+        <metadata-records>
+          <metadata-record class="column">
+            <local-name>[amount]</local-name>
+            <parent-name>[Final SQL]</parent-name>
+          </metadata-record>
+        </metadata-records>
+      </connection>
+      <column caption="Amount" datatype="real" name="[amount]" role="measure" type="quantitative"/>
+      <column caption="Double Amount" datatype="real" name="[Double Amount]" role="measure" type="quantitative">
+        <calculation class="tableau" formula="[amount] * 2"/>
+      </column>
+    </datasource>
+  </datasources>
+  <worksheets>
+    <worksheet name="Amount KPI">
+      <table><view>
+        <datasource-dependencies datasource="Orders">
+          <column datatype="real" name="[Double Amount]" role="measure" type="quantitative"/>
+        </datasource-dependencies>
+      </view></table>
+      <simple-id uuid="{00000000-0000-0000-0000-000000000101}"/>
+    </worksheet>
+  </worksheets>
+  <dashboards>
+    <dashboard name="Executive">
+      <style/>
+      <size maxheight="900" maxwidth="1440" minheight="900" minwidth="1440" sizing-mode="fixed"/>
+      <zones>
+        <zone h="100000" id="1" type-v2="layout-basic" w="100000" x="0" y="0">
+          <zone h="100000" id="2" name="Amount KPI" w="100000" x="0" y="0"/>
+        </zone>
+      </zones>
+      <simple-id uuid="{00000000-0000-0000-0000-000000000102}"/>
+    </dashboard>
+  </dashboards>
+</workbook>"#
+                .to_vec(),
+        )?;
+        let lineage = Lineage::build(&workbook)?;
+
+        assert!(
+            !lineage.gaps.iter().any(|gap| {
+                matches!(
+                    gap.code,
+                    "initial_sql_lineage_unresolved"
+                        | "initial_sql_lineage_partial"
+                        | "temp_table_producer_unresolved"
+                        | "temp_table_connection_unresolved"
+                        | "sql_lineage_unresolved"
+                )
+            }),
+            "CTE/temp chain produced lineage gaps: {:?}",
+            lineage.gaps
+        );
+
+        for alias in ["base", "enriched", "filtered", "final_cte"] {
+            assert!(
+                !lineage.nodes.iter().any(
+                    |node| node.kind == Kind::SqlTable && node.name.eq_ignore_ascii_case(alias)
+                ),
+                "CTE alias leaked into physical SQL lineage: {alias}"
+            );
+        }
+
+        let source = lineage
+            .find_kind("dbo.orders", Some(Kind::SqlTable))
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::Error::new("TEST", "dbo.orders source missing"))?;
+        let downstream = lineage
+            .trace(source.id, Direction::Downstream)
+            .ok_or_else(|| crate::Error::new("TEST", "dbo.orders downstream trace missing"))?;
+
+        for (kind, name) in [
+            (Kind::SqlTable, "#stage"),
+            (Kind::SqlTable, "#final"),
+            (Kind::CustomSql, "Final SQL"),
+            (Kind::Field, "Amount"),
+            (Kind::Calculation, "Double Amount"),
+            (Kind::Worksheet, "Amount KPI"),
+            (Kind::Dashboard, "Executive"),
+        ] {
+            assert!(
+                downstream
+                    .nodes
+                    .iter()
+                    .any(|node| node.kind == kind && node.name.eq_ignore_ascii_case(name)),
+                "CTE/temp chain trace is missing {kind:?} {name:?}"
+            );
+        }
+
+        let customer = lineage
+            .find_kind("dbo.customers", Some(Kind::SqlTable))
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::Error::new("TEST", "dbo.customers source missing"))?;
+        let customer_trace = lineage
+            .trace(customer.id, Direction::Downstream)
+            .ok_or_else(|| crate::Error::new("TEST", "dbo.customers downstream trace missing"))?;
+        assert!(
+            customer_trace
+                .nodes
+                .iter()
+                .any(|node| node.kind == Kind::Dashboard && node.name == "Executive")
+        );
+
+        let dashboard = lineage
+            .find_kind("Executive", Some(Kind::Dashboard))
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::Error::new("TEST", "Executive dashboard missing"))?;
+        let dashboard_upstream = lineage
+            .trace(dashboard.id, Direction::Upstream)
+            .ok_or_else(|| crate::Error::new("TEST", "dashboard upstream trace missing"))?;
+        for name in ["dbo.orders", "dbo.customers", "#stage", "#final"] {
+            assert!(
+                dashboard_upstream.nodes.iter().any(|node| {
+                    node.kind == Kind::SqlTable && node.name.eq_ignore_ascii_case(name)
+                }),
+                "dashboard upstream trace is missing {name:?}"
+            );
+        }
+
+        let final_temp = lineage
+            .find_kind("#final", Some(Kind::SqlTable))
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::Error::new("TEST", "#final temp table missing"))?;
+        let upstream = lineage
+            .trace(final_temp.id, Direction::Upstream)
+            .ok_or_else(|| crate::Error::new("TEST", "#final upstream trace missing"))?;
+        for name in ["#stage", "dbo.orders", "dbo.customers"] {
+            assert!(
+                upstream.nodes.iter().any(|node| {
+                    node.kind == Kind::SqlTable && node.name.eq_ignore_ascii_case(name)
+                }),
+                "#final upstream trace is missing {name:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn mssql_hash_temp_tables_are_scoped_per_connection() -> Result<()> {
         let workbook = Workbook::open(
             br#"<workbook version="26.2" source-build="20262.test">
@@ -1935,6 +2428,151 @@ mod integration_tests {
                 .iter()
                 .any(|node| node.kind == Kind::CustomSql && node.name == "SQL B"),
             "connection-scoped #stage from sqlserver.1 leaked into sqlserver.2"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mssql_temp_names_are_case_insensitive_within_connection() -> Result<()> {
+        let workbook = Workbook::open(
+            br#"<workbook version="26.2" source-build="20262.test">
+  <datasources>
+    <datasource inline="true" name="Orders" version="26.2">
+      <connection class="sqlserver" name="sqlserver.1" one-time-sql="SELECT id INTO #Stage FROM dbo.orders">
+        <relation connection="sqlserver.1" name="Stage SQL" type="text">SELECT * FROM #stage</relation>
+      </connection>
+    </datasource>
+  </datasources>
+</workbook>"#
+                .to_vec(),
+        )?;
+        let lineage = Lineage::build(&workbook)?;
+
+        assert!(!lineage.gaps.iter().any(|gap| {
+            gap.code == "temp_table_producer_unresolved"
+                || gap.code == "temp_table_connection_unresolved"
+        }));
+        assert_eq!(
+            lineage
+                .nodes
+                .iter()
+                .filter(|node| {
+                    node.kind == Kind::SqlTable && node.name.eq_ignore_ascii_case("#stage")
+                })
+                .count(),
+            1
+        );
+
+        let source = lineage
+            .find_kind("dbo.orders", Some(Kind::SqlTable))
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::Error::new("TEST", "dbo.orders source missing"))?;
+        let trace = lineage
+            .trace(source.id, Direction::Downstream)
+            .ok_or_else(|| crate::Error::new("TEST", "source trace missing"))?;
+        assert!(
+            trace
+                .nodes
+                .iter()
+                .any(|node| node.kind == Kind::CustomSql && node.name == "Stage SQL")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mssql_temp_consumer_without_producer_emits_gap() -> Result<()> {
+        let workbook = Workbook::open(
+            br#"<workbook version="26.2" source-build="20262.test">
+  <datasources>
+    <datasource inline="true" name="Orders" version="26.2">
+      <connection class="sqlserver" name="sqlserver.1">
+        <relation connection="sqlserver.1" name="Missing Stage SQL" type="text">SELECT * FROM #missing</relation>
+      </connection>
+    </datasource>
+  </datasources>
+</workbook>"#
+                .to_vec(),
+        )?;
+        let lineage = Lineage::build(&workbook)?;
+
+        assert!(lineage.gaps.iter().any(|gap| {
+            gap.code == "temp_table_producer_unresolved" && gap.context == "Missing Stage SQL"
+        }));
+        assert!(
+            lineage
+                .nodes
+                .iter()
+                .any(|node| node.kind == Kind::SqlTable && node.name == "#missing")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mssql_temp_consumer_without_resolved_connection_emits_gap() -> Result<()> {
+        let workbook = Workbook::open(
+            br#"<workbook version="26.2" source-build="20262.test">
+  <datasources>
+    <datasource inline="true" name="Orders" version="26.2">
+      <connection class="sqlserver" name="sqlserver.1"/>
+      <relation connection="missing.connection" name="Detached Stage SQL" type="text">SELECT * FROM #stage</relation>
+    </datasource>
+  </datasources>
+</workbook>"#
+                .to_vec(),
+        )?;
+        let lineage = Lineage::build(&workbook)?;
+
+        assert!(lineage.gaps.iter().any(|gap| {
+            gap.code == "temp_table_connection_unresolved" && gap.context == "Detached Stage SQL"
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn mssql_forward_temp_reference_emits_gap_without_false_source_path() -> Result<()> {
+        let workbook = Workbook::open(
+            br#"<workbook version="26.2" source-build="20262.test">
+  <datasources>
+    <datasource inline="true" name="Orders" version="26.2">
+      <connection class="sqlserver" name="sqlserver.1" one-time-sql="SELECT id INTO #final FROM #stage; SELECT id INTO #stage FROM dbo.orders">
+        <relation connection="sqlserver.1" name="Final SQL" type="text">SELECT * FROM #final</relation>
+      </connection>
+    </datasource>
+  </datasources>
+</workbook>"#
+                .to_vec(),
+        )?;
+        let lineage = Lineage::build(&workbook)?;
+
+        assert!(lineage.gaps.iter().any(|gap| {
+            gap.code == "temp_table_producer_unresolved"
+                && gap.context == "sqlserver.1"
+                && gap.message.contains("#stage")
+                && gap.message.contains("#final")
+        }));
+
+        let source = lineage
+            .find_kind("dbo.orders", Some(Kind::SqlTable))
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::Error::new("TEST", "dbo.orders source missing"))?;
+        let trace = lineage
+            .trace(source.id, Direction::Downstream)
+            .ok_or_else(|| crate::Error::new("TEST", "dbo.orders trace missing"))?;
+
+        assert!(
+            trace
+                .nodes
+                .iter()
+                .any(|node| node.kind == Kind::SqlTable && node.name == "#stage")
+        );
+        assert!(
+            !trace
+                .nodes
+                .iter()
+                .any(|node| node.kind == Kind::SqlTable && node.name == "#final"),
+            "forward temp reference created a false #stage -> #final lineage path"
         );
         Ok(())
     }
