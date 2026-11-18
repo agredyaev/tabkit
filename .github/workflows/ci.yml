@@ -61,13 +61,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: cargo build --release --locked --bin tabkit-mcp --bin tabkit-extension-host
+      - run: cargo build --release --locked --bin tabkit --bin tabkit-mcp --bin tabkit-extension-host
 
       - name: Package Windows
         shell: pwsh
         run: |
+          Compress-Archive -Path @("target/release/tabkit.exe","README.md","LICENSE") -DestinationPath "tabkit-v$env:PACKAGE_VERSION-windows-x64.zip"
           Compress-Archive -Path @("target/release/tabkit-mcp.exe","README.md","LICENSE") -DestinationPath "tabkit-mcp-v$env:PACKAGE_VERSION-windows-x64.zip"
           Compress-Archive -Path @("target/release/tabkit-extension-host.exe","README.md","LICENSE","docs/EXTENSION_DEPLOYMENT.md") -DestinationPath "tabkit-extension-host-v$env:PACKAGE_VERSION-windows-x64.zip"
+
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: tabkit-v${{ env.PACKAGE_VERSION }}-windows-x64
+          path: tabkit-v${{ env.PACKAGE_VERSION }}-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
