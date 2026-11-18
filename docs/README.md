@@ -7,6 +7,9 @@ TabKit targets Tableau **2026.2.4**, TWB **26.2**, workbook XSD **2026.2.0**, an
 | Task | Page |
 | --- | --- |
 | understand runtime boundaries and lineage | [Architecture](ARCHITECTURE.md) |
+| understand TWB/TWBX admission and preservation | [Workbook and package model](WORKBOOK.md) |
+| configure/use MCP tools and handles | [MCP server](MCP.md) |
+| understand Tableau auth/validate/publish | [Tableau REST](TABLEAU_REST.md) |
 | create calculations, parameters, worksheets, actions | [Authoring](AUTHORING.md) |
 | create Tableau-native dashboards | [Native dashboards](DASHBOARD.md) |
 | create HTML/CSS/JavaScript dashboards | [Web dashboards](WEB_DASHBOARD.md) |

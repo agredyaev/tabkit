@@ -136,6 +136,9 @@ Tableau Server remains the final authority for XSD and Tableau semantic validity
 Published documentation: https://agredyaev.github.io/tabkit/
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Workbook and package model](docs/WORKBOOK.md)
+- [MCP server](docs/MCP.md)
+- [Tableau REST](docs/TABLEAU_REST.md)
 - [Authoring](docs/AUTHORING.md)
 - [Native dashboards](docs/DASHBOARD.md)
 - [Web dashboards](docs/WEB_DASHBOARD.md)

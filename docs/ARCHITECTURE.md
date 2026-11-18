@@ -47,30 +47,15 @@ editing, and package mutation are local.
 | `extension/` | web-dashboard host runtime and Tableau bridge |
 | `perf.rs` | release benchmark harness |
 
-## Session and concurrency model
+## Detailed boundaries
 
-| Property | Behavior |
+| Boundary | Detail |
 | --- | --- |
-| workbook parse | once per opened/candidate handle |
-| shared state | `Arc<Session>` |
-| live handle limit | 64 |
-| blocking XML/ZIP/REST work | `spawn_blocking` from MCP handlers |
-| Streamable HTTP | stateless requests can reuse workbook handles |
-| local paths | allowed by stdio; HTTP requires explicit opt-in |
-| HTTP auth | optional bearer token; non-loopback unauthenticated startup requires explicit override |
-| temporary files | owned by session and deleted when final session reference drops |
-
-## Validation ownership
-
-| TabKit | Tableau |
-| --- | --- |
-| package/size admission | XSD validation |
-| supported-version checks | Tableau semantic validation |
-| edit preconditions | packaged-workbook acceptance |
-| patch preservation | |
-| candidate reparse/postconditions | |
-
-For TWBX, `workbook_validate` submits the embedded TWB. Package/resource acceptance is exercised by publish.
+| workbook/package/XML | [Workbook and package model](WORKBOOK.md) |
+| MCP transport/sessions/tools | [MCP server](MCP.md) |
+| Tableau authentication/validate/publish | [Tableau REST](TABLEAU_REST.md) |
+| semantic authoring | [Authoring](AUTHORING.md) |
+| web-dashboard runtime | [Web dashboards](WEB_DASHBOARD.md) |
 
 ## Lineage
 

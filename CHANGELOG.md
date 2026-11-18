@@ -2,21 +2,46 @@
 
 ## 0.9.0 - 2026-11-18
 
-- Replaced the legacy implementation with the current headless Tableau 2026.2.4 runtime/compiler.
-- Added MCP stdio and Streamable HTTP transports through `rmcp`.
-- Added typed workbook inspection and bounded lineage.
-- Added Initial SQL, Custom SQL, CTE, derived-query, and SQL Server local `#temp` lineage.
-- Added calculation authoring, including same-batch dependencies.
-- Added parameter authoring and parameter indexing.
-- Added bounded bar, line, KPI, and text-table worksheet authoring from existing datasource fields.
-- Added dashboard filter actions and parameter actions.
-- Added dashboard authoring from existing worksheets, filter cards, layout, and presentation styles.
-- Added `create_web_dashboard` and a standalone `tabkit-extension-host` for HTML/CSS/JavaScript dashboards.
-- Added stable `host.html` runtime versioning, HMAC-SHA256 bundle signing, stricter URL validation, HTML sanitization, bridge quotas, and paged data reads for web dashboards.
-- Added Windows x64 deployment ZIPs for `tabkit-mcp` and `tabkit-extension-host` using `<component>-v<version>-windows-x64.zip` names.
-- Added source-preserving TWB/TWBX edits and package preservation checks.
-- Added Tableau REST 3.29 search, download, `validateWorkbook`, publish, and job polling.
-- Added Windows/Linux test coverage, cargo-deny, RustSec audit, Dependabot, and Windows-only deployment packaging.
-- Set the public package and CLI version to `0.9.0`.
+First release of the current Tableau 2026.2.4 implementation.
 
-Earlier releases belong to the legacy implementation and remain available in Git history and existing GitHub releases.
+### Runtime
+
+- Tableau 2026.2.4 / TWB 26.2 / XSD 2026.2.0 / REST 3.29 compatibility boundary.
+- Typed workbook index over TWB/TWBX with source-preserving package handling.
+- MCP stdio and Streamable HTTP transports.
+- Tableau REST search, download, `validateWorkbook`, publish, and job lookup.
+
+### Lineage
+
+- datasource/connection/relation/field/calculation/worksheet/dashboard graph.
+- Initial SQL, Custom SQL, CTE, derived-query, and SQL Server local `#temp` source tracking.
+- Exact field-origin precedence with explicit gaps for unresolved/unsupported provenance.
+
+### Authoring
+
+- calculations, including supported same-batch calculation dependencies;
+- parameters;
+- bar, line, KPI, and text-table worksheets;
+- filter actions and parameter actions;
+- native dashboards with layout, filter cards, and supported worksheet styles;
+- `create_web_dashboard` for signed HTML/CSS/JavaScript Dashboard Extensions.
+
+### Web-dashboard runtime
+
+- standalone `tabkit-extension-host`;
+- stable `host.html` entry point;
+- HMAC-SHA256 signed workbook bundles;
+- URL validation, HTML sanitization, sandbox/CSP isolation;
+- bounded Tableau bridge requests and paged data reads.
+
+### Delivery and quality
+
+- Windows x64 deployment ZIPs for `tabkit-mcp` and `tabkit-extension-host`;
+- Linux/Windows test jobs;
+- format/Clippy/Rustdoc gates;
+- cargo-deny, RustSec audit, Dependabot;
+- mdBook + Mermaid + Rustdoc documentation on GitHub Pages.
+
+Public package/CLI version: `0.9.0`.
+
+Earlier releases belong to the legacy implementation and remain in Git history and existing GitHub releases.

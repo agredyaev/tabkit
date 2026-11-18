@@ -35,6 +35,26 @@ flowchart LR
     validate --> publish["publish"]
 ```
 
+## Calculations
+
+`create_calculation` authors one Tableau calculated field inside an existing datasource.
+
+| Contract | Behavior |
+| --- | --- |
+| formula size | 1..131072 UTF-8 bytes |
+| field syntax | `[Field]` or `[Datasource].[Field]` |
+| same-batch dependencies | supported by bracketed internal field `name` |
+| caption rewriting | not performed |
+| runtime-state functions | `NOW`, `TODAY`, `RANDOM` produce warnings |
+| semantic validation | Tableau remains authoritative |
+
+Local lexical admission rejects malformed strings/comments/date literals, unbalanced delimiters,
+statement separators/NUL, and external execution functions beginning with `RAWSQL`, `SCRIPT`, or
+`MODEL_EXTENSION`.
+
+TabKit extracts field references for dependency checks; it does not execute Tableau calculations or
+claim that a locally admitted formula is semantically valid.
+
 ## Parameters
 
 | Property | Supported values |
