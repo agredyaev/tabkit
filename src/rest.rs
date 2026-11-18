@@ -320,7 +320,7 @@ impl Rest {
             output,
             DownloadReceipt {
                 bytes: total,
-                sha256: format!("{:x}", hash.finalize()),
+                sha256: hex::encode(hash.finalize()),
                 format: if format == "twbx" { "twbx" } else { "twb" },
             },
         ))
@@ -407,7 +407,7 @@ impl Rest {
         temp.as_file_mut().flush()?;
         temp.as_file().sync_all()?;
         Package::open(temp.path(), limits)?;
-        let sha256 = format!("{:x}", hash.finalize());
+        let sha256 = hex::encode(hash.finalize());
         temp.persist_noclobber(output)
             .map_err(|error| Error::new("OUTPUT_EXISTS", error.error.to_string()))?;
 
@@ -542,7 +542,7 @@ impl Rest {
         }
 
         require(
-            format!("{:x}", uploaded_hash.finalize()) == source_hash
+            hex::encode(uploaded_hash.finalize()) == source_hash
                 && package::hash_file(path, limits.file_bytes)? == source_hash,
             "STALE_BASE",
             "Workbook changed during upload",

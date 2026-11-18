@@ -26,7 +26,7 @@ jobs:
           persist-credentials: false
       - uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2
         with:
-          rust-version: "1.88.0"
+          rust-version: "1.89.0"
           command: check
           arguments: --locked
 

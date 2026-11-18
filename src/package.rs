@@ -378,7 +378,7 @@ pub fn hash_file(path: &Path, max_bytes: u64) -> Result<String> {
         hash.update(&buffer[..count]);
     }
 
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex::encode(hash.finalize()))
 }
 
 fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
@@ -395,7 +395,7 @@ fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn safe_entry(name: &str) -> Result<()> {
@@ -428,7 +428,7 @@ fn hash_region(file: &mut File, start: u64, size: u64) -> Result<String> {
         hash.update(&buffer[..count]);
     }
     require(total == size, "ZIP", "Truncated compressed ZIP entry")?;
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex::encode(hash.finalize()))
 }
 
 #[cfg(test)]

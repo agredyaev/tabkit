@@ -1062,7 +1062,7 @@ fn parameter_name(workbook_hash: &str, caption: &str) -> String {
     hash.update(workbook_hash.as_bytes());
     hash.update(b"\0parameter\0");
     hash.update(caption.as_bytes());
-    let digest = format!("{:x}", hash.finalize());
+    let digest = hex::encode(hash.finalize());
     format!("[Parameter_{}]", &digest[..16])
 }
 
@@ -1146,10 +1146,10 @@ fn worksheet_xml(book: &Workbook, spec: &WorksheetSpec) -> Result<String> {
     if let Some(field) = dimension {
         column_nodes.push(field.node);
     }
-    if let Some(field) = secondary {
-        if !column_nodes.contains(&field.node) {
-            column_nodes.push(field.node);
-        }
+    if let Some(field) = secondary
+        && !column_nodes.contains(&field.node)
+    {
+        column_nodes.push(field.node);
     }
     if !column_nodes.contains(&measure.node) {
         column_nodes.push(measure.node);
@@ -1472,7 +1472,7 @@ fn action_name(workbook_hash: &str, kind: &str, caption: &str) -> String {
     hash.update(kind.as_bytes());
     hash.update(b"\0");
     hash.update(caption.as_bytes());
-    let digest = format!("{:X}", hash.finalize());
+    let digest = hex::encode_upper(hash.finalize());
     format!("[Action1_{}]", &digest[..32])
 }
 
@@ -3263,7 +3263,7 @@ fn calculation_name(workbook_hash: &str, spec: &CalculationSpec) -> String {
     digest.update(spec.caption.as_bytes());
     digest.update(b"\0");
     digest.update(spec.formula.as_bytes());
-    let hex = format!("{:X}", digest.finalize());
+    let hex = hex::encode_upper(digest.finalize());
     format!("[Calculation_{}]", &hex[..18])
 }
 
@@ -3272,7 +3272,7 @@ fn deterministic_uuid(workbook_hash: &str, name: &str) -> String {
     digest.update(workbook_hash.as_bytes());
     digest.update(b"\0");
     digest.update(name.as_bytes());
-    let hex = format!("{:X}", digest.finalize());
+    let hex = hex::encode_upper(digest.finalize());
     format!(
         "{{{}-{}-{}-{}-{}}}",
         &hex[0..8],
@@ -3417,7 +3417,7 @@ mod tests {
         let candidate = apply(&book, &batch, 8 << 20)?;
         assert_eq!(
             candidate.receipt.sha256,
-            format!("{:x}", Sha256::digest(candidate.text().as_bytes()))
+            hex::encode(Sha256::digest(candidate.text().as_bytes()))
         );
         let reopened = &candidate.workbook;
         assert_eq!(reopened.calculations.len(), 1);

@@ -264,7 +264,7 @@ impl Document {
             "Incomplete XML document",
         )?;
 
-        let sha256 = format!("{:x}", Sha256::digest(source.as_bytes()));
+        let sha256 = hex::encode(Sha256::digest(source.as_bytes()));
         Ok(Self {
             source,
             names,

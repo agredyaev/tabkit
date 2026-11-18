@@ -18,7 +18,7 @@ use crate::{
 };
 use serde::Serialize;
 use sqlparser::{
-    ast::{Query, SetExpr, Statement, TableFactor, Visit, Visitor},
+    ast::{Query, SetExpr, Statement, TableFactor, TableObject, Visit, Visitor},
     dialect::{GenericDialect, MsSqlDialect},
     parser::Parser,
 };
@@ -1124,10 +1124,11 @@ impl Visitor for Reads {
                 } else {
                     let rendered = name.to_string();
                     let cte = name.0.len() == 1
-                        && self
-                            .scopes
-                            .iter()
-                            .any(|scope| scope.contains(&name.0[0].value.to_lowercase()));
+                        && self.scopes.iter().any(|scope| {
+                            name.0[0]
+                                .as_ident()
+                                .is_some_and(|ident| scope.contains(&ident.value.to_lowercase()))
+                        });
                     if !cte {
                         self.names.insert(rendered);
                     }
@@ -1375,7 +1376,10 @@ fn select_into_temp(query: &Query) -> Option<String> {
     select
         .into
         .as_ref()
-        .and_then(|into| canonical_any_temp_name(&into.name.to_string()))
+        .and_then(|into| match into.targets.as_slice() {
+            [target] => canonical_any_temp_name(&target.to_string()),
+            _ => None,
+        })
 }
 
 fn analyze_initial_sql(
@@ -1406,7 +1410,11 @@ fn analyze_initial_sql(
                 }
             }
             Statement::Insert(insert) => {
-                let Some(target) = canonical_any_temp_name(&insert.table_name.to_string()) else {
+                let TableObject::TableName(table_name) = &insert.table else {
+                    partial = true;
+                    continue;
+                };
+                let Some(target) = canonical_any_temp_name(&table_name.to_string()) else {
                     partial = true;
                     continue;
                 };
@@ -1435,8 +1443,8 @@ fn analyze_initial_sql(
                 if names
                     .iter()
                     .all(|name| canonical_any_temp_name(&name.to_string()).is_some()) => {}
-            Statement::Declare { .. } | Statement::SetVariable { .. }
-                if matches!(flavor, SqlFlavor::MsSql) => {}
+            Statement::Declare { .. } | Statement::Set(_) if matches!(flavor, SqlFlavor::MsSql) => {
+            }
             _ => partial = true,
         }
     }
