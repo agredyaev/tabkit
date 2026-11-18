@@ -56,6 +56,14 @@ impl Config {
             "Tableau server must be an HTTPS URL",
         )?;
         require(
+            url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "CONFIG",
+            "Tableau server URL must not contain user information, query, or fragment",
+        )?;
+        require(
             self.api_version == REST_API_VERSION,
             "CONFIG",
             format!(
@@ -950,6 +958,78 @@ mod tests {
         );
     }
 
+    fn offline_rest(token: &str) -> Result<Rest> {
+        let config = Config {
+            server: "https://tableau.example.test".into(),
+            site: String::new(),
+            api_version: REST_API_VERSION.into(),
+            pat_name: "test-pat".into(),
+            pat_secret_env: "TABKIT_TEST_PAT_SECRET_DO_NOT_SET_8F1A8C9D".into(),
+            timeout: Duration::from_secs(30),
+        };
+        let client = Client::builder().build().map_err(Error::from)?;
+        Ok(Rest {
+            config,
+            client,
+            token: token.into(),
+            site_id: "site-1".into(),
+        })
+    }
+
+    #[test]
+    fn sign_in_fails_before_network_when_pat_secret_is_missing() {
+        let config = Config {
+            server: "https://tableau.example.test".into(),
+            site: String::new(),
+            api_version: REST_API_VERSION.into(),
+            pat_name: "test-pat".into(),
+            pat_secret_env: "TABKIT_TEST_PAT_SECRET_DO_NOT_SET_8F1A8C9D".into(),
+            timeout: Duration::from_secs(30),
+        };
+        let error = match Rest::sign_in(config) {
+            Ok(_) => panic!("missing PAT secret was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "AUTH_CONFIG");
+        assert!(
+            error
+                .message
+                .contains("TABKIT_TEST_PAT_SECRET_DO_NOT_SET_8F1A8C9D")
+        );
+    }
+
+    #[test]
+    fn request_and_sign_out_reject_invalid_session_token_before_network() -> Result<()> {
+        let rest = offline_rest("bad\nsession")?;
+        let url = rest.site_url(&["workbooks"])?;
+        let error = match rest.request(Method::GET, url) {
+            Ok(_) => return Err(Error::new("TEST", "invalid session token was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "AUTH");
+
+        let rest = offline_rest("bad\nsession")?;
+        let error = match rest.sign_out() {
+            Ok(()) => return Err(Error::new("TEST", "invalid sign-out token was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "AUTH");
+        Ok(())
+    }
+
+    #[test]
+    fn search_rejects_blank_query_and_out_of_range_limits_before_network() -> Result<()> {
+        let rest = offline_rest("token")?;
+        for (query, limit) in [("", 10), ("   ", 10), ("Sales", 0), ("Sales", 101)] {
+            let error = match rest.search_workbooks(query, limit) {
+                Ok(_) => return Err(Error::new("TEST", "invalid search arguments were accepted")),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "ARGUMENT", "{query:?} {limit}");
+        }
+        Ok(())
+    }
+
     #[test]
     fn api_url_encodes_dynamic_segments_and_preserves_base_path() -> Result<()> {
         let config = Config {
@@ -964,6 +1044,154 @@ mod tests {
         assert_eq!(
             url.as_str(),
             "https://tableau.example.test/base/api/3.29/sites/site%20id/workbooks/id%2Fwith%20slash"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_server_url_credentials_query_and_fragment() {
+        let config = |server: &str| Config {
+            server: server.into(),
+            site: String::new(),
+            api_version: REST_API_VERSION.into(),
+            pat_name: "test-pat".into(),
+            pat_secret_env: "TABLEAU_PAT_SECRET".into(),
+            timeout: Duration::from_secs(30),
+        };
+        for server in [
+            "https://user@tableau.example.test",
+            "https://user:secret@tableau.example.test",
+            "https://tableau.example.test?x=1",
+            "https://tableau.example.test#fragment",
+        ] {
+            let error = match config(server).validate() {
+                Ok(()) => panic!("unsafe Tableau server URL accepted: {server}"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "CONFIG", "{server}");
+        }
+    }
+
+    #[test]
+    fn workbook_info_rejects_malformed_required_fields_and_shapes() {
+        for value in [
+            json!({"workbooks":{"workbook":"bad"}}),
+            json!({"workbooks":{"workbook":{"name":"Sales"}}}),
+            json!({"workbooks":{"workbook":{"id":"wb-1"}}}),
+            json!({"workbooks":{"workbook":{"id":"","name":"Sales"}}}),
+            json!({"workbooks":{"workbook":{"id":"wb-1","name":""}}}),
+        ] {
+            let error = match workbook_infos(value) {
+                Ok(_) => panic!("malformed workbook response was accepted"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "REST_SHAPE");
+        }
+        assert!(workbook_infos(json!({})).is_ok_and(|items| items.is_empty()));
+    }
+
+    #[test]
+    fn workbook_info_accepts_single_object_and_boolean_extract_flag() -> Result<()> {
+        let items = workbook_infos(json!({
+            "workbooks": {
+                "workbook": {
+                    "id": "wb-1",
+                    "name": "Sales",
+                    "hasExtracts": false
+                }
+            }
+        }))?;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].has_extracts, Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn tableau_error_text_is_bounded_and_utf8_safe() {
+        let detail = format!("{}é{}", "x".repeat(511), "y".repeat(100));
+        let error = tableau_rejection("Workbook publish", 400, &json!({"error":{"detail":detail}}));
+        assert!(error.message.ends_with('…'));
+        assert!(error.message.len() < 600);
+    }
+
+    #[test]
+    fn multipart_mixed_contains_payload_file_and_terminal_boundary() {
+        let (body, content_type) = mixed(
+            "<request/>",
+            Some(("tableau_workbook", "book.twb", b"workbook-bytes")),
+        );
+        let text =
+            String::from_utf8(body).unwrap_or_else(|_| panic!("multipart body is not UTF-8"));
+        let boundary = content_type
+            .strip_prefix("multipart/mixed; boundary=")
+            .unwrap_or_else(|| panic!("multipart content type lacks boundary"));
+        assert!(text.contains("name=\"request_payload\""));
+        assert!(text.contains("<request/>"));
+        assert!(text.contains("name=\"tableau_workbook\"; filename=\"book.twb\""));
+        assert!(text.contains("workbook-bytes"));
+        assert!(text.ends_with(&format!("--{boundary}--\r\n")));
+    }
+
+    fn in_memory_response(status: u16, content_type: &str, body: &[u8]) -> Result<Response> {
+        let response = axum::http::Response::builder()
+            .status(status)
+            .header(axum::http::header::CONTENT_TYPE, content_type)
+            .body(body.to_vec())
+            .map_err(|error| Error::new("TEST", error.to_string()))?;
+        Ok(Response::from(response))
+    }
+
+    #[test]
+    fn response_readers_handle_success_empty_invalid_and_rejected_json() -> Result<()> {
+        let valid = in_memory_response(200, "application/json", br#"{"value":1}"#)?;
+        assert_eq!(read_json(valid, "Read test")?["value"], 1);
+
+        let empty = in_memory_response(204, "application/json", b"")?;
+        assert_eq!(read_json(empty, "Read empty")?, json!({}));
+
+        let invalid = in_memory_response(200, "application/json", b"{broken")?;
+        let error = match read_json(invalid, "Read invalid") {
+            Ok(_) => return Err(Error::new("TEST", "invalid JSON response was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "REST_SHAPE");
+
+        let rejected = in_memory_response(
+            403,
+            "application/json",
+            br#"{"error":{"code":"403001","summary":"Denied","detail":"No access"}}"#,
+        )?;
+        let error = match read_json(rejected, "Read denied") {
+            Ok(_) => return Err(Error::new("TEST", "non-success response was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "REST_REJECTED");
+        assert!(error.message.contains("403001"));
+        assert!(error.message.contains("Denied"));
+        assert!(error.message.contains("No access"));
+
+        let malformed_rejection = in_memory_response(500, "text/plain", b"oops")?;
+        let error = match require_success_response(malformed_rejection, "Server action") {
+            Ok(_) => return Err(Error::new("TEST", "non-JSON rejection was accepted")),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "REST_REJECTED");
+        assert_eq!(
+            error.message,
+            "Server action was rejected by Tableau (HTTP 500)"
+        );
+
+        let success = in_memory_response(200, "text/plain", b"ok")?;
+        assert!(require_success_response(success, "Success").is_ok());
+
+        let any_status = in_memory_response(
+            422,
+            "application/json",
+            br#"{"error":{"summary":"Invalid workbook"}}"#,
+        )?;
+        assert_eq!(
+            read_json_any_status(any_status)?["error"]["summary"],
+            "Invalid workbook"
         );
         Ok(())
     }

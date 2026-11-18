@@ -423,6 +423,17 @@ fn link(value: u32) -> Option<NodeId> {
     (value != NONE).then_some(NodeId(value))
 }
 
+fn xml_character_reference(value: u32) -> Result<char> {
+    let valid = value == 0x9
+        || value == 0xA
+        || value == 0xD
+        || (0x20..=0xD7FF).contains(&value)
+        || (0xE000..=0xFFFD).contains(&value)
+        || (0x10000..=0x10FFFF).contains(&value);
+    require(valid, "XML", "Invalid XML character reference")?;
+    char::from_u32(value).ok_or_else(|| Error::new("XML", "Invalid XML character reference"))
+}
+
 fn decode_attribute(value: &str) -> Result<Cow<'_, str>> {
     if !value.contains('&') {
         return Ok(Cow::Borrowed(value));
@@ -446,15 +457,13 @@ fn decode_attribute(value: &str) -> Result<Cow<'_, str>> {
             _ if entity.starts_with("#x") => {
                 let value = u32::from_str_radix(&entity[2..], 16)
                     .map_err(|_| Error::new("XML", "Invalid hex character reference"))?;
-                char::from_u32(value)
-                    .ok_or_else(|| Error::new("XML", "Invalid XML character reference"))?
+                xml_character_reference(value)?
             }
             _ if entity.starts_with('#') => {
                 let value = entity[1..]
                     .parse::<u32>()
                     .map_err(|_| Error::new("XML", "Invalid character reference"))?;
-                char::from_u32(value)
-                    .ok_or_else(|| Error::new("XML", "Invalid XML character reference"))?
+                xml_character_reference(value)?
             }
             _ => return Err(Error::new("XML", "Unsupported XML entity")),
         };
@@ -546,6 +555,45 @@ mod tests {
         assert_eq!(parse_error("<a/><b/>").code, "XML");
         assert_eq!(parse_error("text<root/>").code, "XML");
         assert_eq!(parse_error("<root>").code, "XML");
+    }
+
+    #[test]
+    fn rejects_invalid_utf8_and_xml_character_references() {
+        let error = match Document::parse(vec![0xff, 0xfe]) {
+            Ok(_) => panic!("invalid UTF-8 was accepted"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "ENCODING");
+
+        for value in [
+            "&#0;",
+            "&#1;",
+            "&#x1F;",
+            "&#xD800;",
+            "&#xFFFE;",
+            "&#x110000;",
+            "&#xZZ;",
+            "&#abc;",
+            "&amp",
+        ] {
+            let error = match decode_attribute(value) {
+                Ok(_) => panic!("invalid XML entity accepted: {value:?}"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "XML", "{value:?}");
+        }
+
+        for (value, expected) in [
+            ("&#9;", "\t"),
+            ("&#10;", "\n"),
+            ("&#13;", "\r"),
+            ("&#x20;", " "),
+            ("&#x1F600;", "😀"),
+        ] {
+            let decoded = decode_attribute(value)
+                .unwrap_or_else(|error| panic!("{value:?}: {}", error.message));
+            assert_eq!(decoded.as_ref(), expected);
+        }
     }
 
     #[test]
