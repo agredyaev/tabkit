@@ -71,3 +71,12 @@ Rustdoc documents contracts that are not recoverable from a signature: invariant
 Rustdoc must not claim that the semantic index is a complete Tableau object model, that local checks replace `validateWorkbook`, or that workbook-local/node-local IDs survive reparsing.
 
 CI builds Rustdoc with warnings denied so broken links and other Rustdoc diagnostics fail the quality job.
+
+
+## Generated API reference
+
+The generated Rust API reference is published inside the TabKit documentation site:
+
+https://agredyaev.github.io/tabkit/api/tabkit/
+
+It is generated from the Rust doc comments in `src/` by `cargo doc`.

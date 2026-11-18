@@ -241,7 +241,9 @@ See [SECURITY.md](SECURITY.md).
 
 ## Documentation
 
-Technical documentation is under [`docs/`](docs/README.md):
+Published documentation: https://agredyaev.github.io/tabkit/
+
+Source Markdown is under [`docs/`](docs/README.md):
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Authoring](docs/AUTHORING.md)

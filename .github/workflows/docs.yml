@@ -45,8 +45,8 @@ jobs:
       - name: Add Rustdoc
         shell: bash
         run: |
-          mkdir -p target/site/rustdoc
-          cp -R target/doc/. target/site/rustdoc/
+          mkdir -p target/site/api
+          cp -R target/doc/. target/site/api/
 
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
