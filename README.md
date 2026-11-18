@@ -34,13 +34,14 @@ TapKit supports:
 
 TapKit does not automate Tableau Desktop.
 
-## Binaries
+## Deployment binaries
 
-The repository builds three binaries:
+Production deployment uses two binaries:
 
-- `tabkit` — CLI;
 - `tabkit-mcp` — MCP server;
 - `tabkit-extension-host` — embedded Tableau Dashboard Extension web host.
+
+The `tabkit` CLI remains available for local development and workbook operations. CI and GitHub releases do not publish it as a deployment artifact.
 
 ## Build
 
@@ -65,15 +66,21 @@ cargo build --release --locked
 cargo test --release --locked --all-targets
 ```
 
-Outputs:
+Deployment outputs:
 
 ```text
-target\release\tabkit.exe
 target\release\tabkit-mcp.exe
 target\release\tabkit-extension-host.exe
 ```
 
-CI publishes separate versioned ZIP artifacts for Linux and Windows, including `tabkit-mcp-v0.9.0-<platform>-x64.zip` and `tabkit-extension-host-v0.9.0-<platform>-x64.zip`. The extension-host binary embeds its browser assets.
+CI and GitHub releases publish Windows x64 deployment ZIPs only:
+
+```text
+tabkit-mcp-v0.9.0-windows-x64.zip
+tabkit-extension-host-v0.9.0-windows-x64.zip
+```
+
+The extension-host binary embeds its browser assets.
 
 ## Tableau configuration
 

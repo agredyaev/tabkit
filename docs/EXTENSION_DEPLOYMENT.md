@@ -10,11 +10,9 @@ Dashboard-specific HTML, CSS, and JavaScript stay in the workbook. The host is a
 
 ## Release artifacts
 
-CI and GitHub releases produce separate deployment ZIPs:
+CI and GitHub releases produce Windows x64 deployment ZIPs only:
 
-    tabkit-mcp-v0.9.0-linux-x64.zip
     tabkit-mcp-v0.9.0-windows-x64.zip
-    tabkit-extension-host-v0.9.0-linux-x64.zip
     tabkit-extension-host-v0.9.0-windows-x64.zip
 
 The extension-host binary embeds host.html, host.css, host.js, and the pinned Tableau Extensions API runtime. No Node.js, Python, IIS static file site, or separate asset directory is required.
