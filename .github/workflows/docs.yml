@@ -23,8 +23,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
-
       - name: Install mdBook 0.5.4
         shell: bash
         run: |
@@ -58,6 +56,9 @@ jobs:
     name: Deploy docs
     needs: build
     runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
