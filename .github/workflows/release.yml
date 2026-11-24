@@ -37,7 +37,7 @@ jobs:
           Compress-Archive -Path @("target/release/tabkit-mcp.exe","README.md","LICENSE") -DestinationPath "tabkit-mcp-v$env:PACKAGE_VERSION-windows-x64.zip"
           Compress-Archive -Path @("target/release/tabkit-extension-host.exe","README.md","LICENSE","docs/EXTENSION_DEPLOYMENT.md") -DestinationPath "tabkit-extension-host-v$env:PACKAGE_VERSION-windows-x64.zip"
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows-x64
           path: |
